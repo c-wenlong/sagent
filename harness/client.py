@@ -2,17 +2,17 @@
 client.py - HydraDB client wrapper using the official hydra-db-python SDK
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from hydra_db import HydraDB
 
 
 class HydraDBClient:
-    def __init__(self, api_key: str, tenant_id: str, sub_tenant_id: Optional[str] = None):
+    def __init__(self, api_key: str, tenant_id: str, sub_tenant_id: str | None = None):
         self.api_key = api_key
         self.tenant_id = tenant_id
         self.sub_tenant_id = sub_tenant_id or "default"
-        self._client: Optional[HydraDB] = None
+        self._client: HydraDB | None = None
 
     def _get_client(self) -> HydraDB:
         if self._client is None:
@@ -22,8 +22,8 @@ class HydraDBClient:
     def add_memory(
         self,
         text: str,
-        user_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        user_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
         infer: bool = True,
     ) -> str:
         client = self._get_client()
@@ -46,9 +46,9 @@ class HydraDBClient:
     def recall(
         self,
         query: str,
-        user_id: Optional[str] = None,
+        user_id: str | None = None,
         max_results: int = 5,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         client = self._get_client()
         if user_id:
             results = client.recall.recall_preferences(
@@ -64,21 +64,28 @@ class HydraDBClient:
                 query=query,
                 max_results=max_results,
             )
-        return [
-            {
-                "source_id": chunk.source_id,
-                "content": chunk.content,
-                "metadata": getattr(chunk, 'metadata', None) or {},
-            }
-            for chunk in results.chunks
-        ]
+        entries = []
+        for chunk in results.chunks or []:
+            metadata: dict[str, Any] = {}
+            doc_meta = getattr(chunk, "document_metadata", None) or {}
+            tenant_meta = getattr(chunk, "tenant_metadata", None) or {}
+            metadata.update({k: v for k, v in doc_meta.items() if v is not None})
+            metadata.update({k: v for k, v in tenant_meta.items() if v is not None})
+            entries.append(
+                {
+                    "source_id": chunk.source_id,
+                    "content": chunk.chunk_content,
+                    "metadata": metadata,
+                }
+            )
+        return entries
 
     def get_memories(
         self,
         kind: str = "memories",
         page: int = 1,
         page_size: int = 50,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         client = self._get_client()
         result = client.fetch.list_data(
             tenant_id=self.tenant_id,

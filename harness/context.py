@@ -4,16 +4,23 @@ context.py - ContextBuilder assembles memory entries into prompt context
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from .memory import MemoryEntry, MemoryStore, MemoryType
+from .memory import (
+    MemoryEntry,
+    MemoryStore,
+    MemoryType,
+    _clean_content,
+    _resolve_memory_type,
+    _resolve_user_id,
+)
 
 
 @dataclass
 class TimeRange:
-    last_n_days: Optional[int] = None
-    start_date: Optional[datetime] = None
-    end_date: Optional[datetime] = None
+    last_n_days: int | None = None
+    start_date: datetime | None = None
+    end_date: datetime | None = None
 
     def contains(self, dt: datetime) -> bool:
         if self.last_n_days:
@@ -35,12 +42,12 @@ class ContextBuilder:
     def build(
         self,
         prompt: str,
-        user_id: Optional[str] = None,
+        user_id: str | None = None,
         max_tokens: int = 4000,
-        include_types: Optional[List[MemoryType]] = None,
-        time_range: Optional[TimeRange] = None,
+        include_types: list[MemoryType] | None = None,
+        time_range: TimeRange | None = None,
     ) -> str:
-        filters: List[Dict[str, Any]] = []
+        filters: list[dict[str, Any]] = []
         if user_id:
             filters.append({"field": "user_id", "operator": "==", "value": user_id})
         if include_types:
@@ -54,21 +61,28 @@ class ContextBuilder:
 
         entries = []
         for m in all_memories:
-            metadata = m.get("metadata", {})
+            content = m.get("content", "")
+            metadata = m.get("metadata") or {}
+            entry_user = _resolve_user_id(metadata, content)
+            if user_id and entry_user and entry_user != user_id:
+                continue
             created_str = metadata.get("created_at", datetime.utcnow().isoformat())
             try:
-                created_dt = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
-            except (ValueError, AttributeError):
+                created_dt = datetime.fromisoformat(str(created_str).replace("Z", "+00:00"))
+            except (ValueError, AttributeError, TypeError):
                 created_dt = datetime.utcnow()
             if time_range is None or time_range.contains(created_dt):
                 entry = MemoryEntry(
                     id=metadata.get("memory_id", m.get("source_id", "")),
-                    type=MemoryType(metadata.get("memory_type", "fact")),
-                    content=m.get("content", ""),
+                    type=_resolve_memory_type(metadata, content),
+                    content=_clean_content(content),
                     metadata=metadata,
                     created_at=created_dt,
                     source_id=m.get("source_id"),
+                    user_id=entry_user,
                 )
+                if include_types and entry.type not in include_types:
+                    continue
                 entries.append(entry)
 
         grouped = self._group_by_type(entries)
@@ -95,15 +109,15 @@ class ContextBuilder:
 
         return "".join(context_parts)
 
-    def _group_by_type(self, entries: List[MemoryEntry]) -> Dict[MemoryType, List[MemoryEntry]]:
-        grouped: Dict[MemoryType, List[MemoryEntry]] = {}
+    def _group_by_type(self, entries: list[MemoryEntry]) -> dict[MemoryType, list[MemoryEntry]]:
+        grouped: dict[MemoryType, list[MemoryEntry]] = {}
         for entry in entries:
             if entry.type not in grouped:
                 grouped[entry.type] = []
             grouped[entry.type].append(entry)
         return grouped
 
-    def _format_section(self, title: str, entries: List[MemoryEntry], limit: int = 10) -> str:
+    def _format_section(self, title: str, entries: list[MemoryEntry], limit: int = 10) -> str:
         lines = [f"\n### {title}\n"]
         for entry in entries[:limit]:
             date_str = entry.created_at.strftime("%Y-%m-%d")

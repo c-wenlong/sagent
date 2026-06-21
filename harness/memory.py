@@ -2,16 +2,23 @@
 memory.py - MemoryEntry dataclass and MemoryStore for HydraDB operations
 """
 
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
-from typing import Any, Dict, List, Optional
+from enum import StrEnum
+from typing import Any
 
 from .client import HydraDBClient
 
+# Embedded in stored text so list API can recover type/user (HydraDB list has no metadata).
+_MEMORY_HEADER_RE = re.compile(
+    r"^\[(?P<type>\w+)(?::(?P<user>[^\]]+))?\]\s+(?P<body>.+)$",
+    re.DOTALL,
+)
 
-class MemoryType(str, Enum):
+
+class MemoryType(StrEnum):
     FACT = "fact"
     PREFERENCE = "preference"
     INTERACTION = "interaction"
@@ -24,15 +31,15 @@ class MemoryEntry:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     type: MemoryType = MemoryType.FACT
     content: str = ""
-    embedding: Optional[List[float]] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    embedding: list[float] | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
-    session_id: Optional[str] = None
-    user_id: Optional[str] = None
-    source_id: Optional[str] = None
+    session_id: str | None = None
+    user_id: str | None = None
+    source_id: str | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "type": self.type.value,
@@ -47,13 +54,9 @@ class MemoryEntry:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "MemoryEntry":
+    def from_dict(cls, data: dict[str, Any]) -> "MemoryEntry":
         created = data.get("created_at")
         updated = data.get("updated_at")
-        if isinstance(created, str):
-            created = datetime.fromisoformat(created)
-        if isinstance(updated, str):
-            updated = datetime.fromisoformat(updated)
         if isinstance(created, str):
             created = datetime.fromisoformat(created.replace("Z", "+00:00"))
         if isinstance(updated, str):
@@ -72,6 +75,47 @@ class MemoryEntry:
         )
 
 
+def _encode_stored_content(content: str, memory_type: MemoryType, user_id: str | None) -> str:
+    """Prefix content so list API can recover type and user without metadata."""
+    user_part = f":{user_id}" if user_id else ""
+    return f"[{memory_type.value}{user_part}] {content}"
+
+
+def _decode_stored_content(content: str) -> tuple[MemoryType | None, str | None, str]:
+    """Parse embedded header; returns (type, user_id, clean_content)."""
+    match = _MEMORY_HEADER_RE.match(content)
+    if not match:
+        return None, None, content
+    try:
+        memory_type = MemoryType(match.group("type").lower())
+    except ValueError:
+        memory_type = None
+    return memory_type, match.group("user"), match.group("body")
+
+
+def _resolve_memory_type(metadata: dict[str, Any], content: str) -> MemoryType:
+    raw = metadata.get("memory_type")
+    if raw:
+        try:
+            return MemoryType(str(raw).lower())
+        except ValueError:
+            pass
+    parsed_type, _, _ = _decode_stored_content(content)
+    return parsed_type or MemoryType.FACT
+
+
+def _resolve_user_id(metadata: dict[str, Any], content: str) -> str | None:
+    if metadata.get("user_id"):
+        return metadata["user_id"]
+    _, parsed_user, _ = _decode_stored_content(content)
+    return parsed_user
+
+
+def _clean_content(content: str) -> str:
+    _, _, body = _decode_stored_content(content)
+    return body
+
+
 class MemoryStore:
     def __init__(self, client: HydraDBClient):
         self.client = client
@@ -82,10 +126,12 @@ class MemoryStore:
             "memory_type": entry.type.value,
             "session_id": entry.session_id,
             "user_id": entry.user_id,
+            "created_at": entry.created_at.isoformat(),
             **entry.metadata,
         }
+        stored_content = _encode_stored_content(entry.content, entry.type, entry.user_id)
         source_id = self.client.add_memory(
-            text=entry.content,
+            text=stored_content,
             user_id=entry.user_id,
             metadata=metadata,
             infer=True,
@@ -93,70 +139,91 @@ class MemoryStore:
         entry.source_id = source_id
         return entry.id
 
+    def _entry_from_raw(
+        self,
+        source_id: str,
+        content: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> MemoryEntry:
+        metadata = metadata or {}
+        memory_type = _resolve_memory_type(metadata, content)
+        user_id = _resolve_user_id(metadata, content)
+        created_str = metadata.get("created_at")
+        try:
+            created_at = (
+                datetime.fromisoformat(str(created_str).replace("Z", "+00:00"))
+                if created_str
+                else datetime.utcnow()
+            )
+        except (ValueError, TypeError):
+            created_at = datetime.utcnow()
+        return MemoryEntry(
+            id=metadata.get("memory_id", source_id),
+            type=memory_type,
+            content=_clean_content(content),
+            metadata=metadata,
+            created_at=created_at,
+            source_id=source_id,
+            user_id=user_id,
+        )
+
     def recall(
         self,
         query: str,
-        user_id: Optional[str] = None,
+        user_id: str | None = None,
         limit: int = 5,
-    ) -> List[MemoryEntry]:
+    ) -> list[MemoryEntry]:
         results = self.client.recall(
             query=query,
             user_id=user_id,
             max_results=limit,
         )
-        entries = []
-        for r in results:
-            entry = MemoryEntry(
-                id=r.get("source_id", ""),
-                type=MemoryType.FACT,
-                content=r.get("content", ""),
-                metadata=r.get("metadata", {}) or {},
-                source_id=r.get("source_id"),
-            )
-            entries.append(entry)
-        return entries
+        return [self._entry_from_raw(r["source_id"], r["content"], r.get("metadata")) for r in results]
 
     def get_recent(
         self,
-        user_id: Optional[str] = None,
+        user_id: str | None = None,
         limit: int = 20,
-    ) -> List[MemoryEntry]:
-        all_memories = self.client.get_memories(kind="memories", page_size=limit)
+    ) -> list[MemoryEntry]:
+        page_size = min(max(limit * 3, limit), 100)
+        all_memories = self.client.get_memories(kind="memories", page_size=page_size)
         entries = []
         for m in all_memories:
-            entry = MemoryEntry(
-                id=m.get("source_id", ""),
-                type=MemoryType.FACT,
-                content=m.get("content", ""),
-                metadata={},
-                source_id=m.get("source_id"),
+            content = m.get("content", "")
+            metadata = m.get("metadata") or {}
+            entry_user = _resolve_user_id(metadata, content)
+            if user_id and entry_user and entry_user != user_id:
+                continue
+            entries.append(
+                self._entry_from_raw(m.get("source_id", ""), content, metadata)
             )
-            entries.append(entry)
-        return entries[:limit]
+            if len(entries) >= limit:
+                break
+        return entries
 
     def get_by_type(
         self,
         memory_type: MemoryType,
-        user_id: Optional[str] = None,
+        user_id: str | None = None,
         limit: int = 20,
-    ) -> List[MemoryEntry]:
-        all_memories = self.client.get_memories(kind="memories", page_size=limit)
+    ) -> list[MemoryEntry]:
+        page_size = min(max(limit * 3, limit), 100)
+        all_memories = self.client.get_memories(kind="memories", page_size=page_size)
         entries = []
         for m in all_memories:
-            metadata = m.get("metadata", {})
-            if metadata.get("memory_type") != memory_type.value:
+            content = m.get("content", "")
+            metadata = m.get("metadata") or {}
+            if _resolve_memory_type(metadata, content) != memory_type:
                 continue
-            if user_id and metadata.get("user_id") != user_id:
+            entry_user = _resolve_user_id(metadata, content)
+            if user_id and entry_user and entry_user != user_id:
                 continue
-            entry = MemoryEntry(
-                id=metadata.get("memory_id", m.get("source_id", "")),
-                type=MemoryType(metadata.get("memory_type", "fact")),
-                content=m.get("content", ""),
-                metadata=metadata,
-                source_id=m.get("source_id"),
+            entries.append(
+                self._entry_from_raw(m.get("source_id", ""), content, metadata)
             )
-            entries.append(entry)
-        return entries[:limit]
+            if len(entries) >= limit:
+                break
+        return entries
 
     def update(self, id: str, content: str) -> bool:
         return False
@@ -164,5 +231,5 @@ class MemoryStore:
     def delete(self, id: str) -> bool:
         return False
 
-    def get(self, id: str) -> Optional[MemoryEntry]:
+    def get(self, id: str) -> MemoryEntry | None:
         return None

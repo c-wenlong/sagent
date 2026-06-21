@@ -1,19 +1,24 @@
 """
 Tests for the interactive REPL.
-
-Uses mocked curses to test TUI logic without a terminal.
 """
 
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import MagicMock, patch
-from io import StringIO
+from prompt_toolkit.document import Document
 
 from repl import (
-    ThinkingCanceller,
-    REPLSession,
-    handle_command,
     COMMANDS,
     COMPLETIONS,
+    REPLSession,
+    SlashCommandCompleter,
+    ThinkingCanceller,
+    chat_with_spinner,
+    complete_slash_command,
+    filter_slash_commands,
+    handle_command,
+    normalize_user_input,
+    run_think_in_thread,
 )
 
 
@@ -53,6 +58,8 @@ class MockHarness:
         self.remembered = []
         self.recent_memories = []
         self.profile_data = MagicMock()
+        self.think_response = "Hello from agent"
+        self.think_error = None
 
     def remember(self, content, user_id, memory_type):
         self.remembered.append({"content": content, "user_id": user_id, "memory_type": memory_type})
@@ -62,6 +69,11 @@ class MockHarness:
 
     def profile(self, user_id):
         return self.profile_data
+
+    def think(self, prompt, user_id, store_interaction=True):
+        if self.think_error:
+            raise self.think_error
+        return self.think_response
 
 
 class TestHandleCommand:
@@ -77,6 +89,12 @@ class TestHandleCommand:
         result = handle_command("remember my name is kai", harness, "user1")
         assert result is True
         assert len(harness.remembered) == 1
+        assert harness.remembered[0]["content"] == "my name is kai"
+
+    def test_slash_remember_command(self):
+        harness = MockHarness()
+        result = handle_command("/remember my name is kai", harness, "user1")
+        assert result is True
         assert harness.remembered[0]["content"] == "my name is kai"
 
     def test_pref_command(self):
@@ -137,6 +155,34 @@ class TestHandleCommand:
         assert len(harness.remembered) == 0
 
 
+class TestCompleteSlashCommand:
+    """Tests for slash command helpers."""
+
+    def test_normalize_strips_slash(self):
+        assert normalize_user_input("/memories") == "memories"
+        assert normalize_user_input("hello") == "hello"
+
+    def test_filter_by_prefix(self):
+        matches = filter_slash_commands("mem")
+        assert any(cmd["name"] == "memories" for cmd in matches)
+
+    def test_empty_returns_slash(self):
+        assert complete_slash_command("") == ""
+
+    def test_slash_returns_first_command(self):
+        assert complete_slash_command("/") == f"/{COMPLETIONS[0]}"
+
+    def test_partial_match(self):
+        result = complete_slash_command("/mem")
+        assert result == "/memories"
+
+    def test_completer_suggests_memories(self):
+        completer = SlashCommandCompleter()
+        doc = Document("/mem", 4)
+        values = [c.text for c in completer.get_completions(doc, None)]
+        assert "memories" in values
+
+
 class TestREPLSession:
     """Tests for REPLSession state management."""
 
@@ -144,68 +190,63 @@ class TestREPLSession:
         harness = MockHarness()
         session = REPLSession(harness, "user1")
         assert session.user_id == "user1"
-        assert session.input_buffer == ""
         assert session.is_thinking() is False
         assert session.is_cancelled() is False
-
-    def test_handle_key_backspace(self):
-        harness = MockHarness()
-        session = REPLSession(harness, "user1")
-        session.input_buffer = "hello"
-        result = session.handle_key(127)
-        assert result == "backspace"
-        assert session.input_buffer == "hell"
-
-    def test_handle_key_tab_with_slash_completes(self):
-        harness = MockHarness()
-        session = REPLSession(harness, "user1")
-        session.input_buffer = "/"
-        result = session.handle_key(9)
-        assert result == "tab"
-        assert session.input_buffer == "remember <text>"
-
-    def test_handle_key_tab_empty_completes_to_slash(self):
-        harness = MockHarness()
-        session = REPLSession(harness, "user1")
-        result = session.handle_key(9)
-        assert result == "tab"
-        assert session.input_buffer == "/"
-
-    def test_handle_key_escape_clears_buffer(self):
-        harness = MockHarness()
-        session = REPLSession(harness, "user1")
-        session.input_buffer = "hello"
-        result = session.handle_key(27)
-        assert result == "escape"
-        assert session.input_buffer == ""
-
-    def test_handle_key_char(self):
-        harness = MockHarness()
-        session = REPLSession(harness, "user1")
-        result = session.handle_key(ord("h"))
-        assert result == "char"
-        assert session.input_buffer == "h"
-
-    def test_handle_key_enter(self):
-        harness = MockHarness()
-        session = REPLSession(harness, "user1")
-        result = session.handle_key(10)
-        assert result == "enter"
-
-    def test_handle_key_ctrl_c(self):
-        harness = MockHarness()
-        session = REPLSession(harness, "user1")
-        result = session.handle_key(3)
-        assert result == "eof"
 
     def test_cancel_thinking(self):
         harness = MockHarness()
         session = REPLSession(harness, "user1")
         session.canceller = ThinkingCanceller()
         session.canceller.start()
-        assert session.is_thinking() is True
         session.cancel_thinking()
         assert session.is_cancelled() is True
+
+    def test_wait_for_result_returns_queue_item(self):
+        harness = MockHarness()
+        session = REPLSession(harness, "user1")
+        session.result_queue.put(("success", "hello"))
+        session.think_thread = MagicMock()
+        session.think_thread.is_alive.return_value = False
+        result = session.wait_for_result()
+        assert result == ("success", "hello")
+
+    def test_wait_for_result_returns_none_when_cancelled(self):
+        harness = MockHarness()
+        session = REPLSession(harness, "user1")
+        session.canceller.cancel()
+        session.think_thread = MagicMock()
+        session.think_thread.is_alive.return_value = False
+        result = session.wait_for_result()
+        assert result is None
+
+
+class TestRunThinkInThread:
+    def test_respects_cancel_event(self):
+        import queue
+        import threading
+
+        harness = MockHarness()
+        result_queue = queue.Queue()
+        cancel_event = threading.Event()
+        cancel_event.set()
+
+        run_think_in_thread(harness, "hello", "user1", result_queue, cancel_event)
+        assert result_queue.empty()
+
+
+class TestChatWithSpinner:
+    def test_prints_agent_response(self, capsys):
+        harness = MockHarness()
+        chat_with_spinner(harness, "user1", "hello there")
+        output = capsys.readouterr().out
+        assert "Hello from agent" in output
+
+    def test_prints_error_on_failure(self, capsys):
+        harness = MockHarness()
+        harness.think_error = RuntimeError("LLM down")
+        chat_with_spinner(harness, "user1", "hello there")
+        output = capsys.readouterr().out
+        assert "LLM down" in output
 
 
 class TestCommandsList:
@@ -218,5 +259,5 @@ class TestCommandsList:
             assert found, f"Command {cmd} not found"
 
     def test_completions_match_commands(self):
-        cmd_texts = [cmd for cmd, _ in COMMANDS]
-        assert sorted(COMPLETIONS) == sorted(cmd_texts)
+        cmd_names = [cmd.split()[0] for cmd, _ in COMMANDS]
+        assert sorted(COMPLETIONS) == sorted(cmd_names)

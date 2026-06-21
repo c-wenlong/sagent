@@ -14,10 +14,11 @@ A minimal (~750 LoC) Python harness that wraps HydraDB to give AI agents long-te
 ## Quick Start
 
 ```bash
-pip install -r requirements.txt
+pip install -e .
 cp .env.example .env
 # Edit .env with your API keys
-python demo.py
+sagent          # interactive REPL
+sagent demo     # cross-session memory demo
 ```
 
 ## Environment Variables

@@ -3,8 +3,8 @@ utils.py - Helper utilities for the agent harness
 """
 
 import os
+
 import tiktoken
-from typing import List, Optional
 
 
 def count_tokens(text: str, model: str = "gpt-4") -> int:
@@ -26,7 +26,7 @@ def truncate_to_token_limit(text: str, max_tokens: int, model: str = "gpt-4") ->
     return encoding.decode(tokens[:max_tokens])
 
 
-def load_env(var_name: str, default: Optional[str] = None) -> Optional[str]:
+def load_env(var_name: str, default: str | None = None) -> str | None:
     return os.environ.get(var_name, default)
 
 
@@ -39,7 +39,7 @@ def format_memory_entry(entry, verbose: bool = False) -> str:
     return base
 
 
-def format_memories(entries: List, max_per_type: int = 5) -> str:
+def format_memories(entries: list, max_per_type: int = 5) -> str:
     if not entries:
         return "No memories found."
 

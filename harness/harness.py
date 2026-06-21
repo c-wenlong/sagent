@@ -3,7 +3,7 @@ harness.py - AgentHarness main class wrapping memory + context + session + LLM
 """
 
 import os
-from typing import Any, Dict, List, Optional, TypeVar
+from typing import Any, TypeVar
 
 from openai import OpenAI
 
@@ -11,7 +11,7 @@ from .client import HydraDBClient
 from .context import ContextBuilder, TimeRange
 from .memory import MemoryEntry, MemoryStore, MemoryType
 from .session import Session, SessionManager
-from .utils import count_tokens, truncate_to_token_limit
+from .utils import truncate_to_token_limit
 
 DEFAULT_MODEL = "zai-org/GLM-5.2"
 DEFAULT_BASE_URL = "https://api.tokenfactory.nebius.com/v1/"
@@ -23,13 +23,13 @@ T = TypeVar("T")
 class UserProfile:
     def __init__(self, user_id: str):
         self.user_id = user_id
-        self.preferences: List[str] = []
-        self.facts: List[str] = []
-        self.interactions: List[str] = []
-        self.thoughts: List[str] = []
-        self.events: List[str] = []
+        self.preferences: list[str] = []
+        self.facts: list[str] = []
+        self.interactions: list[str] = []
+        self.thoughts: list[str] = []
+        self.events: list[str] = []
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "user_id": self.user_id,
             "preferences": self.preferences,
@@ -46,7 +46,7 @@ class AgentHarness:
         api_key: str,
         tenant_id: str,
         sub_tenant_id: str = "default",
-        llm_api_key: Optional[str] = None,
+        llm_api_key: str | None = None,
         llm_model: str = DEFAULT_MODEL,
         max_context_tokens: int = 4000,
     ):
@@ -71,10 +71,10 @@ class AgentHarness:
         self,
         prompt: str,
         user_id: str,
-        session_id: Optional[str] = None,
+        session_id: str | None = None,
         store_interaction: bool = True,
-        include_types: Optional[List[MemoryType]] = None,
-        time_range: Optional[TimeRange] = None,
+        include_types: list[MemoryType] | None = None,
+        time_range: TimeRange | None = None,
     ) -> str:
         context = self.context_builder.build(
             prompt=prompt,
@@ -102,9 +102,9 @@ class AgentHarness:
         content: str,
         user_id: str,
         memory_type: MemoryType = MemoryType.FACT,
-        metadata: Optional[Dict[str, Any]] = None,
-        session_id: Optional[str] = None,
-        embedding: Optional[List[float]] = None,
+        metadata: dict[str, Any] | None = None,
+        session_id: str | None = None,
+        embedding: list[float] | None = None,
     ) -> str:
         entry = MemoryEntry(
             type=memory_type,
@@ -126,7 +126,7 @@ class AgentHarness:
         query: str,
         user_id: str,
         limit: int = 5,
-    ) -> List[MemoryEntry]:
+    ) -> list[MemoryEntry]:
         return self.memory_store.recall(query=query, user_id=user_id, limit=limit)
 
     def profile(self, user_id: str) -> UserProfile:
@@ -150,14 +150,14 @@ class AgentHarness:
     def start_session(self, user_id: str) -> Session:
         return self.session_manager.start_session(user_id)
 
-    def end_session(self, session_id: str) -> Optional[Session]:
+    def end_session(self, session_id: str) -> Session | None:
         return self.session_manager.end_session(session_id)
 
     def get_recent_memories(
         self,
         user_id: str,
         limit: int = 20,
-    ) -> List[MemoryEntry]:
+    ) -> list[MemoryEntry]:
         return self.memory_store.get_recent(user_id=user_id, limit=limit)
 
     def _build_prompt(self, context: str, prompt: str) -> str:

@@ -2,9 +2,12 @@
 Integration tests for sagent harness (requires real API keys)
 """
 
-import pytest
 import os
+
+import pytest
 from dotenv import load_dotenv
+
+from harness import MemoryType
 
 load_dotenv()
 
@@ -50,7 +53,7 @@ class TestHydraDBIntegration:
         user_id = "test_integration_user"
 
         entry_id = harness.remember(
-            content=f"Test memory at 2026",
+            content="Test memory at 2026",
             user_id=user_id,
         )
         assert entry_id is not None
@@ -85,12 +88,12 @@ class TestHydraDBIntegration:
         harness.remember(
             content="I prefer concise responses",
             user_id=user_id,
-            memory_type="PREFERENCE",
+            memory_type=MemoryType.PREFERENCE,
         )
         harness.remember(
             content="I am a software engineer",
             user_id=user_id,
-            memory_type="FACT",
+            memory_type=MemoryType.FACT,
         )
 
         profile = harness.profile(user_id)
@@ -101,7 +104,7 @@ class TestHydraDBIntegration:
 @pytest.mark.integration
 class TestNebiusIntegration:
     def test_llm_call(self, harness):
-        harness.llm_api_key  # ensure configured
+        assert harness.llm_api_key is not None
 
         response = harness._call_llm("Say 'hello' in exactly one word")
         assert response.lower() == "hello"

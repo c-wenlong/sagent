@@ -2,19 +2,23 @@
 Unit tests for sagent harness
 """
 
-import pytest
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 from harness import (
     AgentHarness,
+    ContextBuilder,
     MemoryEntry,
     MemoryStore,
     MemoryType,
-    ContextBuilder,
     SessionManager,
 )
 from harness.context import TimeRange
+from harness.memory import (
+    _decode_stored_content,
+    _encode_stored_content,
+    _resolve_memory_type,
+)
 
 
 class TestMemoryEntry:
@@ -57,6 +61,22 @@ class TestMemoryEntry:
         assert entry.type == MemoryType.FACT
 
 
+class TestMemoryEncoding:
+    def test_encode_decode_roundtrip(self):
+        stored = _encode_stored_content("Hello world", MemoryType.PREFERENCE, "user_1")
+        assert stored == "[preference:user_1] Hello world"
+        memory_type, user_id, content = _decode_stored_content(stored)
+        assert memory_type == MemoryType.PREFERENCE
+        assert user_id == "user_1"
+        assert content == "Hello world"
+
+    def test_resolve_type_from_metadata(self):
+        assert _resolve_memory_type(
+            {"memory_type": "event"},
+            "[fact:user_1] ignored",
+        ) == MemoryType.EVENT
+
+
 class TestMemoryStore:
     def test_add_memory(self):
         mock_client = MagicMock()
@@ -72,14 +92,17 @@ class TestMemoryStore:
         entry_id = store.add(entry)
         assert entry_id == entry.id
         mock_client.add_memory.assert_called_once()
+        call_kwargs = mock_client.add_memory.call_args.kwargs
+        assert call_kwargs["text"].startswith("[fact:user_1]")
+        assert call_kwargs["metadata"]["memory_type"] == "fact"
 
     def test_recall(self):
         mock_client = MagicMock()
         mock_client.recall.return_value = [
             {
                 "source_id": "src-1",
-                "content": "Learning Rust",
-                "metadata": {"memory_type": "fact", "memory_id": "mem-1"},
+                "content": "[fact:user_1] Learning Rust",
+                "metadata": {"memory_type": "fact", "memory_id": "mem-1", "user_id": "user_1"},
             }
         ]
 
@@ -89,15 +112,19 @@ class TestMemoryStore:
         assert len(results) == 1
         assert results[0].content == "Learning Rust"
         assert results[0].type == MemoryType.FACT
+        assert results[0].user_id == "user_1"
 
     def test_get_recent(self):
         mock_client = MagicMock()
         mock_client.get_memories.return_value = [
             {
                 "source_id": "src-1",
-                "content": "Memory 1",
-                "metadata": {"memory_type": "fact", "user_id": "user_1"},
-            }
+                "content": "[fact:user_1] Memory 1",
+            },
+            {
+                "source_id": "src-2",
+                "content": "[preference:user_2] Other user",
+            },
         ]
 
         store = MemoryStore(mock_client)
@@ -105,6 +132,7 @@ class TestMemoryStore:
 
         assert len(results) == 1
         assert results[0].content == "Memory 1"
+        assert results[0].type == MemoryType.FACT
 
 
 class TestContextBuilder:
@@ -140,6 +168,20 @@ class TestContextBuilder:
 
         assert "Current Query" in context
         assert "What am I working on?" in context
+
+    def test_build_filters_by_user_id(self):
+        mock_client = MagicMock()
+        mock_client.get_memories.return_value = [
+            {"source_id": "src-1", "content": "[fact:user_1] Rust project"},
+            {"source_id": "src-2", "content": "[fact:user_2] Python project"},
+        ]
+
+        store = MemoryStore(mock_client)
+        builder = ContextBuilder(store)
+        context = builder.build(prompt="What am I working on?", user_id="user_1")
+
+        assert "Rust project" in context
+        assert "Python project" not in context
 
 
 class TestSessionManager:

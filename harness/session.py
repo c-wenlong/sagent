@@ -5,9 +5,8 @@ session.py - SessionManager tracks session state and manages session-bound memor
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List, Optional
 
-from .memory import MemoryEntry, MemoryStore, MemoryType
+from .memory import MemoryEntry, MemoryStore
 
 
 @dataclass
@@ -15,11 +14,11 @@ class Session:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     user_id: str = ""
     started_at: datetime = field(default_factory=datetime.utcnow)
-    ended_at: Optional[datetime] = None
-    entry_ids: List[str] = field(default_factory=list)
+    ended_at: datetime | None = None
+    entry_ids: list[str] = field(default_factory=list)
     active: bool = True
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         return {
             "id": self.id,
             "user_id": self.user_id,
@@ -30,7 +29,7 @@ class Session:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict) -> "Session":
+    def from_dict(cls, data: dict) -> "Session":
         started = data.get("started_at")
         ended = data.get("ended_at")
         if isinstance(started, str):
@@ -50,14 +49,14 @@ class Session:
 class SessionManager:
     def __init__(self, memory_store: MemoryStore):
         self.memory_store = memory_store
-        self._sessions: Dict[str, Session] = {}
+        self._sessions: dict[str, Session] = {}
 
     def start_session(self, user_id: str) -> Session:
         session = Session(user_id=user_id)
         self._sessions[session.id] = session
         return session
 
-    def end_session(self, session_id: str) -> Optional[Session]:
+    def end_session(self, session_id: str) -> Session | None:
         if session_id not in self._sessions:
             return None
         session = self._sessions[session_id]
@@ -65,14 +64,14 @@ class SessionManager:
         session.active = False
         return session
 
-    def get_session(self, session_id: str) -> Optional[Session]:
+    def get_session(self, session_id: str) -> Session | None:
         return self._sessions.get(session_id)
 
     def add_memory_to_session(self, session_id: str, entry_id: str):
         if session_id in self._sessions:
             self._sessions[session_id].entry_ids.append(entry_id)
 
-    def get_session_context(self, session_id: str) -> List[MemoryEntry]:
+    def get_session_context(self, session_id: str) -> list[MemoryEntry]:
         session = self.get_session(session_id)
         if not session:
             return []
@@ -81,12 +80,12 @@ class SessionManager:
             entries.append(MemoryEntry(id=entry_id))
         return entries
 
-    def merge_to_long_term(self, session_id: str) -> List[str]:
+    def merge_to_long_term(self, session_id: str) -> list[str]:
         session = self.get_session(session_id)
         if not session:
             return []
         return list(session.entry_ids)
 
-    def get_user_sessions(self, user_id: str, limit: int = 10) -> List[Session]:
+    def get_user_sessions(self, user_id: str, limit: int = 10) -> list[Session]:
         user_sessions = [s for s in self._sessions.values() if s.user_id == user_id]
         return sorted(user_sessions, key=lambda s: s.started_at, reverse=True)[:limit]

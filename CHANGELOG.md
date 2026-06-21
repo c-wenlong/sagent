@@ -5,20 +5,26 @@ All notable changes to sagent are documented here.
 ## [0.1.1] - 2026-06-21
 
 ### Added
-- Interactive REPL (`repl.py`) with streaming output and loading animation
+- Interactive REPL (`repl.py`) with loading animation
+- **`sagent` CLI command** — run `pip install -e .` then type `sagent` to start the REPL
 - Spinner animation while agent is thinking
-- Pixel art avatars from `assets/icons/human.png` and `assets/icons/agent.png`
-- Background highlighting for user/agent messages instead of labels
 - Colorized terminal output (ANSI)
 - All memory type shortcuts: remember, pref, interact, think, event
-- REPL tests for avatar pixel loading
-- **Escape key** cancels thinking (stops spinner, skips response)
+- REPL tests for session and command handling
+- **Ctrl+C** cancels thinking (stops spinner, skips response)
 
 ### Changed
-- N/A
+- REPL rewritten without curses — uses standard `input()` loop to fix terminal glitches
+- REPL slash commands use `prompt_toolkit` dropdown autocomplete (pi/opencode-style, non-blocking)
+- `demo.py` rewritten as a structured two-act cross-session demo (sagent meta narrative, all 5 memory types, isolated sub-tenant)
 
 ### Fixed
-- N/A
+- REPL TUI flicker and corrupted terminal state from curses/endwin/ANSI cursor juggling
+- HydraDB recall used wrong chunk field (`content` → `chunk_content`) — recall returned nothing
+- Memory types and user IDs now encoded in stored text for list API; metadata used on recall
+- ContextBuilder filters memories by user_id
+- REPL exit no longer prints "Goodbye" twice
+- Integration tests use `MemoryType` enum instead of raw strings
 
 ## [0.1.0] - 2026-06-21
 

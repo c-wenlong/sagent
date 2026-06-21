@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 """
-Interactive REPL for sagent harness with streaming and loading animation.
+Interactive REPL for sagent harness with loading animation.
 
 Usage: python3 repl.py
 """
 
 import os
-import sys
-import time
-import threading
 import queue
-import curses
+import sys
+import threading
+import time
+
 from dotenv import load_dotenv
+from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.document import Document
+from prompt_toolkit.formatted_text import HTML
+from prompt_toolkit.shortcuts import CompleteStyle, PromptSession
+from prompt_toolkit.styles import Style
 
 from harness import AgentHarness, MemoryType
 
@@ -30,37 +35,35 @@ FG_DIM = "\033[90m"
 FG_RED = "\033[91m"
 FG_BOLD_CYAN = "\033[1;96m"
 
-COMMANDS = [
-    ("remember <text>", "Store a fact"),
-    ("pref <text>", "Store a preference"),
-    ("interact <text>", "Store an interaction"),
-    ("think <text>", "Store a thought"),
-    ("event <text>", "Store an event"),
-    ("memories", "Show recent memories"),
-    ("profile", "Show user profile"),
-    ("clear", "Clear screen"),
-    ("help", "Show help"),
+PROMPT = f"{FG_CYAN}> {RESET}"
+
+# Slash commands shown in the autocomplete dropdown (pi/opencode-style).
+SLASH_COMMANDS = [
+    {"name": "remember", "description": "Store a fact", "hint": "<text>"},
+    {"name": "pref", "description": "Store a preference", "hint": "<text>"},
+    {"name": "interact", "description": "Store an interaction", "hint": "<text>"},
+    {"name": "think", "description": "Store a thought", "hint": "<text>"},
+    {"name": "event", "description": "Store an event", "hint": "<text>"},
+    {"name": "memories", "description": "Show recent memories"},
+    {"name": "profile", "description": "Show user profile"},
+    {"name": "clear", "description": "Clear screen"},
+    {"name": "help", "description": "Show help"},
+    {"name": "exit", "description": "Exit the REPL"},
 ]
 
-COMPLETIONS = [cmd for cmd, _ in COMMANDS]
+COMMANDS = [(f"{c['name']} {c['hint']}" if c.get("hint") else c["name"], c["description"]) for c in SLASH_COMMANDS]
+COMPLETIONS = [cmd["name"] for cmd in SLASH_COMMANDS]
+
+PROMPT_STYLE = Style.from_dict({"prompt": "ansicyan bold"})
+_PROMPT_SESSION: PromptSession | None = None
 
 
 def print_banner():
     """Print the initial banner."""
     print("\033[2J\033[H", end="")
     print(f"{BG_HEADER}{FG_WHITE}  sagent  {RESET}")
-    print(f"{FG_DIM}Type {FG_GREEN}help{FG_DIM} for commands, {FG_GREEN}exit{FG_DIM} to quit")
-    print(f"{FG_DIM}Press {FG_YELLOW}Esc{FG_DIM} during thinking to cancel\n")
-    print(f"{FG_BOLD_CYAN}Tip:{RESET} Type {FG_GREEN}/{RESET} then Tab to autocomplete commands\n")
-
-
-def print_user_message(text):
-    """Print user message with background highlight."""
-    lines = text.split("\n")
-    print(f"{BG_USER}{FG_WHITE} {FG_CYAN}You:{RESET}")
-    for line in lines:
-        print(f"{BG_USER}{FG_WHITE} {line}{RESET}")
-    print()
+    print(f"{FG_DIM}Type {FG_GREEN}/{FG_DIM} for commands, {FG_GREEN}help{FG_DIM} to list all, {FG_GREEN}exit{FG_DIM} to quit")
+    print(f"{FG_DIM}Press {FG_YELLOW}Ctrl+C{FG_DIM} during thinking to cancel\n")
 
 
 def print_agent_message(text):
@@ -92,8 +95,74 @@ def print_system_message(text):
     print(f"{FG_DIM}{text}{RESET}")
 
 
+def normalize_user_input(user_input: str) -> str:
+    """Strip leading slash so `/remember foo` and `remember foo` both work."""
+    text = user_input.strip()
+    if text.startswith("/"):
+        return text[1:]
+    return text
+
+
+def filter_slash_commands(prefix: str) -> list[dict]:
+    """Filter slash commands by prefix, with fuzzy fallback like pi."""
+    if not prefix:
+        return SLASH_COMMANDS
+    lower = prefix.lower()
+    starts_with = [cmd for cmd in SLASH_COMMANDS if cmd["name"].lower().startswith(lower)]
+    if starts_with:
+        return starts_with
+    return [cmd for cmd in SLASH_COMMANDS if lower in cmd["name"].lower()]
+
+
+class SlashCommandCompleter(Completer):
+    """Non-blocking slash-command dropdown, triggered when input starts with /."""
+
+    def get_completions(self, document: Document, complete_event):
+        line = document.text_before_cursor
+        if not line.startswith("/"):
+            return
+        if " " in line:
+            return
+
+        prefix = line[1:]
+        for cmd in filter_slash_commands(prefix):
+            name = cmd["name"]
+            meta = cmd["description"]
+            if cmd.get("hint"):
+                meta = f"{cmd['hint']} — {meta}"
+            yield Completion(
+                name,
+                start_position=-len(prefix),
+                display=HTML(f"<ansigreen>/{name}</ansigreen>"),
+                display_meta=meta,
+            )
+
+
+def complete_slash_command(buffer: str) -> str:
+    """Expand a partial slash command (used by tests and tab-style helpers)."""
+    if not buffer.startswith("/"):
+        return buffer
+    prefix = buffer[1:]
+    matches = filter_slash_commands(prefix)
+    if not matches:
+        return buffer
+    return f"/{matches[0]['name']}"
+
+
+def get_prompt_session() -> PromptSession:
+    global _PROMPT_SESSION
+    if _PROMPT_SESSION is None:
+        _PROMPT_SESSION = PromptSession(
+            completer=SlashCommandCompleter(),
+            complete_style=CompleteStyle.COLUMN,
+            complete_while_typing=True,
+            style=PROMPT_STYLE,
+        )
+    return _PROMPT_SESSION
+
+
 class ThinkingCanceller:
-    """Handles thinking animation with Escape key cancellation."""
+    """Spinner shown while the agent is thinking."""
 
     def __init__(self, message="Thinking"):
         self.message = message
@@ -113,9 +182,6 @@ class ThinkingCanceller:
                 if self.cancel_event.is_set():
                     return
                 time.sleep(0.01)
-        if self.cancel_event.is_set() and self.running:
-            sys.stdout.write(f"\r{FG_RED}✗ Cancelled{RESET}   ")
-            sys.stdout.flush()
 
     def start(self):
         self.running = True
@@ -128,7 +194,6 @@ class ThinkingCanceller:
 
     def stop(self):
         self.running = False
-        self.cancel_event.set()
         if self.spinner_thread:
             self.spinner_thread.join(timeout=0.5)
         sys.stdout.write("\r" + " " * (len(self.message) + 10) + "\r")
@@ -139,22 +204,25 @@ class ThinkingCanceller:
         self.cancel_event.set()
 
 
-def run_think_in_thread(harness, prompt, user_id, result_queue):
-    """Run think() in thread and put result in queue."""
+def run_think_in_thread(harness, prompt, user_id, result_queue, cancel_event):
+    """Run think() in a thread and put result in queue."""
     try:
         response = harness.think(prompt=prompt, user_id=user_id, store_interaction=True)
-        result_queue.put(("success", response))
+        if not cancel_event.is_set():
+            result_queue.put(("success", response))
     except Exception as e:
-        result_queue.put(("error", str(e)))
+        if not cancel_event.is_set():
+            result_queue.put(("error", str(e)))
 
 
 def handle_command(user_input, harness, user_id):
     """Process a command. Returns True if was a command (not chat), False if chat."""
+    user_input = normalize_user_input(user_input)
+
     if not user_input:
         return True
 
     if user_input.lower() in ("exit", "quit", "q"):
-        print_success("Goodbye!")
         raise SystemExit(0)
 
     if user_input.lower().startswith("remember "):
@@ -222,19 +290,18 @@ def handle_command(user_input, harness, user_id):
         print(f"""
 {BG_HEADER} Commands {RESET}
 
-  {FG_GREEN}remember <text>{RESET}  Store a fact
-  {FG_GREEN}pref <text>{RESET}         Store a preference
-  {FG_GREEN}interact <text>{RESET}    Store an interaction
-  {FG_GREEN}think <text>{RESET}       Store a thought
-  {FG_GREEN}event <text>{RESET}       Store an event
-  {FG_GREEN}memories{RESET}            Show recent memories
-  {FG_GREEN}profile{RESET}             Show user profile
-  {FG_GREEN}clear{RESET}              Clear screen
-  {FG_GREEN}help{FG_DIM}               Show this help
-  {FG_GREEN}exit/quit{FG_DIM}          Exit
+  {FG_GREEN}/remember <text>{RESET}  Store a fact
+  {FG_GREEN}/pref <text>{RESET}         Store a preference
+  {FG_GREEN}/interact <text>{RESET}    Store an interaction
+  {FG_GREEN}/think <text>{RESET}       Store a thought
+  {FG_GREEN}/event <text>{RESET}       Store an event
+  {FG_GREEN}/memories{RESET}            Show recent memories
+  {FG_GREEN}/profile{RESET}             Show user profile
+  {FG_GREEN}/clear{RESET}              Clear screen
+  {FG_GREEN}/help{FG_DIM}               Show this help
+  {FG_GREEN}/exit{FG_DIM}               Exit
 
-  {FG_YELLOW}Tab{RESET} - Autocomplete commands
-
+  {FG_DIM}Type {FG_GREEN}/{FG_DIM} to open the command menu while typing.
 Or just type anything to chat with the agent!
 """)
         return True
@@ -243,12 +310,11 @@ Or just type anything to chat with the agent!
 
 
 class REPLSession:
-    """Testable REPL session state."""
+    """Testable REPL session state for async thinking."""
 
     def __init__(self, harness, user_id):
         self.harness = harness
         self.user_id = user_id
-        self.input_buffer = ""
         self.canceller = ThinkingCanceller()
         self.result_queue = queue.Queue()
         self.think_thread = None
@@ -260,14 +326,20 @@ class REPLSession:
         self.result_queue = queue.Queue()
         self.think_thread = threading.Thread(
             target=run_think_in_thread,
-            args=(self.harness, user_input, self.user_id, self.result_queue),
-            daemon=True
+            args=(
+                self.harness,
+                user_input,
+                self.user_id,
+                self.result_queue,
+                self.canceller.cancel_event,
+            ),
+            daemon=True,
         )
         self.think_thread.start()
 
     def is_thinking(self):
         """Check if currently thinking."""
-        return self.canceller.running
+        return self.think_thread is not None and self.think_thread.is_alive()
 
     def is_cancelled(self):
         """Check if thinking was cancelled."""
@@ -277,60 +349,67 @@ class REPLSession:
         """Cancel the current thinking."""
         self.canceller.cancel()
 
-    def finish_thinking(self):
-        """Stop spinner and get result. Call after is_thinking becomes False."""
+    def wait_for_result(self, poll_interval=0.1):
+        """Block until thinking finishes or is cancelled. Returns (status, result) or None."""
+        while self.is_thinking():
+            time.sleep(poll_interval)
         self.canceller.stop()
+        if self.is_cancelled():
+            return None
         if not self.result_queue.empty():
             return self.result_queue.get_nowait()
         return None
 
-    def handle_key(self, key):
-        """Handle a keypress. Returns action string."""
-        if key == curses.KEY_BACKSPACE or key in (127,):
-            self.input_buffer = self.input_buffer[:-1]
-            return "backspace"
 
-        if key == 9:
-            if self.input_buffer == "":
-                self.input_buffer = "/"
-            elif self.input_buffer.startswith("/"):
-                if self.input_buffer == "/":
-                    self.input_buffer = COMPLETIONS[0]
-                else:
-                    matches = [c for c in COMPLETIONS if c.startswith(self.input_buffer)]
-                    if matches:
-                        self.input_buffer = matches[0]
-            return "tab"
-
-        if key == 27:
-            self.input_buffer = ""
-            return "escape"
-
-        if key in (curses.KEY_ENTER, 10, 13):
-            return "enter"
-
-        if 32 <= key <= 126:
-            ch = chr(key)
-            self.input_buffer += ch
-            return "char"
-
-        if key in (3, 4):
-            return "eof"
-
-        return "unknown"
+def read_input():
+    """Read a line of input with slash-command autocomplete when attached to a TTY."""
+    try:
+        if sys.stdin.isatty():
+            return get_prompt_session().prompt([("class:prompt", "> ")]).strip()
+        return input(PROMPT).strip()
+    except EOFError:
+        print()
+        raise SystemExit(0) from None
+    except KeyboardInterrupt:
+        print()
+        raise SystemExit(0) from None
 
 
-def main(stdscr):
-    curses.curs_set(0)
-    stdscr.nodelay(True)
-    stdscr.timeout(100)
+def chat_with_spinner(harness, user_id, user_input):
+    """Send a chat message and show a spinner while waiting."""
+    session = REPLSession(harness, user_id)
+    session.start_thinking(user_input)
 
+    try:
+        while session.is_thinking():
+            time.sleep(0.1)
+    except KeyboardInterrupt:
+        session.cancel_thinking()
+        session.wait_for_result()
+        print_error("Cancelled")
+        print()
+        return
+
+    result = session.wait_for_result()
+    if result is None:
+        print_error("Cancelled")
+        print()
+        return
+
+    status, response = result
+    if status == "success":
+        print_agent_message(response)
+    else:
+        print_error(f"Error: {response}")
+        print()
+
+
+def main():
     hydra_key = os.getenv("HYDRA_DB_API_KEY")
     tenant_id = os.getenv("HYDRA_DB_TENANT_ID")
     llm_key = os.getenv("NEBIUS_API_KEY")
 
     if not all([hydra_key, tenant_id, llm_key]):
-        curses.endwin()
         print(f"{FG_YELLOW}Error: Missing required environment variables.{RESET}")
         print("Set HYDRA_DB_API_KEY, HYDRA_DB_TENANT_ID, NEBIUS_API_KEY in .env")
         return
@@ -338,68 +417,22 @@ def main(stdscr):
     harness = AgentHarness(api_key=hydra_key, tenant_id=tenant_id, llm_api_key=llm_key)
     user_id = os.getenv("SAGENT_USER_ID", "default_user")
 
-    curses.endwin()
     print_banner()
 
-    session = REPLSession(harness, user_id)
-
     while True:
-        curses.endwin()
-        prompt = f"{FG_CYAN}> {RESET}{session.input_buffer}"
-        sys.stdout.write(f"{prompt}\033[0G")
-        sys.stdout.write(f"\033[{len(session.input_buffer)}C")
-        sys.stdout.flush()
+        user_input = read_input()
 
-        key = stdscr.getch()
-
-        if key == curses.ERR:
-            if session.is_thinking():
-                if session.is_cancelled():
-                    session.finish_thinking()
-                    print_error("Cancelled")
-                    print()
-                    session = REPLSession(harness, user_id)
-                elif not session.result_queue.empty():
-                    session.finish_thinking()
-                    status, result = session.result_queue.get_nowait()
-                    if status == "success":
-                        print_agent_message(result)
-                    else:
-                        print_error(f"Error: {result}")
-                    print()
-                    session = REPLSession(harness, user_id)
-            continue
-
-        action = session.handle_key(key)
-
-        if action == "enter":
-            user_input = session.input_buffer.strip()
-            session.input_buffer = ""
-            print()
-            curses.endwin()
-
-            try:
-                is_cmd = handle_command(user_input, harness, user_id)
-            except SystemExit:
-                print(f"{FG_GREEN}Goodbye!{RESET}")
-                return
-
-            if is_cmd or not user_input:
-                continue
-
-            session.start_thinking(user_input)
-            continue
-
-        if action == "escape":
-            if session.is_thinking():
-                session.cancel_thinking()
-            continue
-
-        if action == "eof":
-            curses.endwin()
+        try:
+            is_cmd = handle_command(user_input, harness, user_id)
+        except SystemExit:
             print(f"{FG_GREEN}Goodbye!{RESET}")
             return
 
+        if is_cmd or not user_input:
+            continue
+
+        chat_with_spinner(harness, user_id, user_input)
+
 
 if __name__ == "__main__":
-    curses.wrapper(main)
+    main()

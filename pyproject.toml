@@ -1,3 +1,37 @@
+[project]
+name = "sagent"
+version = "0.1.1"
+description = "AI agent harness with HydraDB long-term memory"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "openai>=1.0.0",
+    "python-dotenv>=1.0.0",
+    "tiktoken>=0.5.0",
+    "hydra-db-python>=0.1.6",
+    "pydantic>=2.0",
+    "prompt_toolkit>=3.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.1",
+]
+
+[project.scripts]
+sagent = "sagent_cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["harness*"]
+
+[tool.setuptools]
+py-modules = ["sagent_cli", "repl", "demo"]
+
 [tool.ruff]
 line-length = 88
 target-version = "py312"
