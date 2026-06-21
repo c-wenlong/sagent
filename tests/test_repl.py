@@ -6,47 +6,19 @@ import pytest
 from unittest.mock import patch, MagicMock
 from io import StringIO
 
-from repl import Spinner, load_avatar_pixels
+from repl import ThinkingCanceller
 
 
-class TestSpinner:
-    def test_spinner_init(self):
-        spinner = Spinner("Testing")
-        assert spinner.message == "Testing"
-        assert spinner.running is False
-        assert spinner.index == 0
+class TestThinkingCanceller:
+    def test_canceller_init(self):
+        c = ThinkingCanceller("Thinking")
+        assert c.message == "Thinking"
+        assert c.running is False
+        assert c.cancelled is False
 
-    def test_spinner_frames(self):
-        spinner = Spinner()
-        assert len(spinner.frames) == 10
-        assert "⠋" in spinner.frames
-
-    def test_stream_print(self):
-        from repl import stream_print
-        output = StringIO()
-        with patch("sys.stdout", output):
-            stream_print("Hello")
-        result = output.getvalue()
-        assert result == "Hello\n"
-
-
-class TestAvatarPixels:
-    def test_load_avatar_pixels(self):
-        pixels = load_avatar_pixels("assets/icons/human.png", 20, 12)
-        assert len(pixels) == 12
-        assert len(pixels[0]) == 20
-
-    def test_avatar_colors_are_integers(self):
-        pixels = load_avatar_pixels("assets/icons/agent.png", 10, 5)
-        for row in pixels:
-            for color in row:
-                assert isinstance(color, int)
-                assert 0 <= color <= 255
-
-
-class TestREPLCommands:
-    def test_repl_requires_env_vars(self):
-        pass
+    def test_canceller_was_cancelled_false_initially(self):
+        c = ThinkingCanceller()
+        assert c.was_cancelled() is False
 
 
 class TestREPLMemoryTypes:

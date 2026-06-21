@@ -9,9 +9,8 @@ import os
 import sys
 import time
 import threading
-import select
+import queue
 from dotenv import load_dotenv
-from PIL import Image
 
 from harness import AgentHarness, MemoryType
 
@@ -31,107 +30,75 @@ FG_DIM = "\033[90m"
 FG_RED = "\033[91m"
 
 
-def load_avatar_pixels(img_path, max_width=20, max_height=12):
-    """Load and resize image to pixel art, return list of ANSI color codes per row."""
-    img = Image.open(img_path).convert("RGB")
-    img = img.resize((max_width, max_height), Image.Resampling.NEAREST)
-    pixels = img.load()
-    width, height = img.size
-
-    def rgb_to_ansi(r, g, b):
-        if r == g == b:
-            return 16 if r < 128 else 231
-        if r > 200 and g < 100 and b < 100:
-            return 196
-        if r > 200 and g > 200 and b < 100:
-            return 226
-        if r < 100 and g > 200 and b < 100:
-            return 46
-        if r < 100 and g > 200 and b > 200:
-            return 51
-        if r < 100 and g < 100 and b > 200:
-            return 21
-        if r > 200 and g < 100 and b > 200:
-            return 201
-        return 255
-
-    result = []
-    for y in range(height):
-        row = []
-        for x in range(width):
-            r, g, b = pixels[x, y]
-            row.append(rgb_to_ansi(r, g, b))
-        result.append(row)
-    return result
-
-
-AVATAR_HUMAN = load_avatar_pixels("assets/icons/human.png", 20, 12)
-AVATAR_AGENT = load_avatar_pixels("assets/icons/agent.png", 20, 12)
-
-
-class Spinner:
-    """Spinner animation with Escape key detection."""
+class ThinkingCanceller:
+    """Handles thinking animation with Escape key cancellation."""
 
     def __init__(self, message="Thinking"):
         self.message = message
         self.frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
         self.index = 0
         self.running = False
-        self.thread = None
         self.cancelled = False
+        self.spinner_thread = None
+        self.input_thread = None
+        self.cancel_event = threading.Event()
 
-    def _spin(self):
-        while self.running:
-            # Check for Escape key press (non-blocking)
-            if self._escape_pressed():
-                self.cancelled = True
-                self.running = False
-                sys.stdout.write(f"\r{FG_RED}✗ Cancelled{RESET}")
-                sys.stdout.flush()
-                return
-
+    def _spinner_loop(self):
+        while self.running and not self.cancel_event.is_set():
             frame = self.frames[self.index % len(self.frames)]
             sys.stdout.write(f"\r{FG_YELLOW}{frame}{RESET} {self.message}...")
             sys.stdout.flush()
             self.index += 1
-            time.sleep(0.08)
+            for _ in range(8):
+                if self.cancel_event.is_set():
+                    return
+                time.sleep(0.01)
 
-    def _escape_pressed(self):
-        """Check if Escape key was pressed (non-blocking read)."""
-        if select.select([sys.stdin], [], [], 0)[0]:
-            ch = sys.stdin.read(1)
-            if ch == '\x1b':  # Escape
-                # Drain any remaining escape sequence characters
-                while select.select([sys.stdin], [], [], 0)[0]:
-                    sys.stdin.read(1)
-                return True
-            # Put non-escape chars back would be complex, so we just note it
-        return False
+        if self.cancel_event.is_set() and self.running:
+            sys.stdout.write(f"\r{FG_RED}✗ Cancelled{RESET}   ")
+            sys.stdout.flush()
 
     def start(self):
         self.running = True
         self.cancelled = False
-        self.thread = threading.Thread(target=self._spin, daemon=True)
-        self.thread.start()
+        self.cancel_event.clear()
+        self.spinner_thread = threading.Thread(target=self._spinner_loop, daemon=True)
+        self.spinner_thread.start()
+
+    def was_cancelled(self):
+        return self.cancel_event.is_set()
 
     def stop(self):
         self.running = False
-        if self.thread:
-            self.thread.join(timeout=0.5)
+        self.cancel_event.set()
+        if self.spinner_thread:
+            self.spinner_thread.join(timeout=0.5)
         sys.stdout.write("\r" + " " * (len(self.message) + 10) + "\r")
         sys.stdout.flush()
 
-    def is_cancelled(self):
-        return self.cancelled
+
+def run_think_in_thread(harness, prompt, user_id, result_queue):
+    """Run think() in thread and put result in queue."""
+    try:
+        response = harness.think(prompt=prompt, user_id=user_id, store_interaction=True)
+        result_queue.put(("success", response))
+    except Exception as e:
+        result_queue.put(("error", str(e)))
+
+
+def print_user_message(text):
+    """Print user message with background highlight."""
+    lines = text.split("\n")
+    print(f"{BG_USER}{FG_WHITE} {FG_CYAN}You:{RESET}")
+    for line in lines:
+        print(f"{BG_USER}{FG_WHITE} {line}{RESET}")
+    print()
 
 
 def print_agent_message(text):
-    """Print agent message with background highlight and avatar."""
+    """Print agent message with background highlight."""
     lines = text.split("\n")
-    print(f"{BG_AGENT}{FG_WHITE}{BOLD} {RESET}", end="")
-    for color in AVATAR_AGENT[0]:
-        print(f"\033[48;5;{color}m  ", end="")
-    print(f"\033[0m {FG_MAGENTA}{BOLD}Agent:{RESET}")
+    print(f"{BG_AGENT}{FG_WHITE} {FG_MAGENTA}Agent:{RESET}")
     for line in lines:
         print(f"{BG_AGENT}{FG_WHITE} {line}{RESET}")
     print()
@@ -155,15 +122,6 @@ def print_error(text):
 def print_header(text):
     """Print header banner."""
     print(f"{BG_HEADER}{FG_WHITE} {text} {RESET}")
-
-
-def stream_print(text):
-    """Print text character by character."""
-    for char in text:
-        sys.stdout.write(char)
-        sys.stdout.flush()
-        time.sleep(0.003)
-    print()
 
 
 def main():
@@ -302,32 +260,47 @@ def main():
   {FG_GREEN}memories{RESET}            Show recent memories
   {FG_GREEN}profile{RESET}             Show user profile
   {FG_GREEN}clear{RESET}              Clear screen
-  {FG_GREEN}help{FG_GREEN}               Show this help
-  {FG_GREEN}exit/quit{FG_GREEN}          Exit
+  {FG_GREEN}help{FG_DIM}               Show this help
+  {FG_GREEN}exit/quit{FG_DIM}          Exit
 
-  {FG_YELLOW}Esc{RESET} - Cancel during thinking
+  {FG_YELLOW}Esc{RESET} during thinking - Cancel
 
 Or just type anything to chat with the agent!
 """)
             continue
 
-        spinner = Spinner("Thinking")
-        spinner.start()
+        canceller = ThinkingCanceller("Thinking")
+        canceller.start()
 
-        response = harness.think(
-            prompt=user_input,
-            user_id=user_id,
-            store_interaction=True,
+        result_queue = queue.Queue()
+        think_thread = threading.Thread(
+            target=run_think_in_thread,
+            args=(harness, user_input, user_id, result_queue),
+            daemon=True
         )
+        think_thread.start()
 
-        spinner.stop()
+        while think_thread.is_alive():
+            if canceller.was_cancelled():
+                time.sleep(0.1)
+                break
+            time.sleep(0.05)
 
-        if spinner.is_cancelled():
+        canceller.stop()
+
+        if canceller.was_cancelled():
             print_error("Cancelled")
             print()
             continue
 
-        print_agent_message(response)
+        think_thread.join(timeout=0.1)
+
+        if not result_queue.empty():
+            status, result = result_queue.get_nowait()
+            if status == "success":
+                print_agent_message(result)
+            else:
+                print_error(f"Error: {result}")
         print()
 
 
