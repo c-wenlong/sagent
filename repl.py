@@ -134,6 +134,10 @@ class ThinkingCanceller:
         sys.stdout.write("\r" + " " * (len(self.message) + 10) + "\r")
         sys.stdout.flush()
 
+    def cancel(self):
+        """Cancel thinking immediately."""
+        self.cancel_event.set()
+
 
 def run_think_in_thread(harness, prompt, user_id, result_queue):
     """Run think() in thread and put result in queue."""
@@ -151,7 +155,7 @@ def handle_command(user_input, harness, user_id):
 
     if user_input.lower() in ("exit", "quit", "q"):
         print_success("Goodbye!")
-        sys.exit(0)
+        raise SystemExit(0)
 
     if user_input.lower().startswith("remember "):
         content = user_input[9:].strip()
@@ -238,6 +242,84 @@ Or just type anything to chat with the agent!
     return False
 
 
+class REPLSession:
+    """Testable REPL session state."""
+
+    def __init__(self, harness, user_id):
+        self.harness = harness
+        self.user_id = user_id
+        self.input_buffer = ""
+        self.canceller = ThinkingCanceller()
+        self.result_queue = queue.Queue()
+        self.think_thread = None
+
+    def start_thinking(self, user_input):
+        """Start the thinking process for user input."""
+        self.canceller = ThinkingCanceller("Thinking")
+        self.canceller.start()
+        self.result_queue = queue.Queue()
+        self.think_thread = threading.Thread(
+            target=run_think_in_thread,
+            args=(self.harness, user_input, self.user_id, self.result_queue),
+            daemon=True
+        )
+        self.think_thread.start()
+
+    def is_thinking(self):
+        """Check if currently thinking."""
+        return self.canceller.running
+
+    def is_cancelled(self):
+        """Check if thinking was cancelled."""
+        return self.canceller.was_cancelled()
+
+    def cancel_thinking(self):
+        """Cancel the current thinking."""
+        self.canceller.cancel()
+
+    def finish_thinking(self):
+        """Stop spinner and get result. Call after is_thinking becomes False."""
+        self.canceller.stop()
+        if not self.result_queue.empty():
+            return self.result_queue.get_nowait()
+        return None
+
+    def handle_key(self, key):
+        """Handle a keypress. Returns action string."""
+        if key == curses.KEY_BACKSPACE or key in (127,):
+            self.input_buffer = self.input_buffer[:-1]
+            return "backspace"
+
+        if key == 9:
+            if self.input_buffer == "":
+                self.input_buffer = "/"
+            elif self.input_buffer.startswith("/"):
+                if self.input_buffer == "/":
+                    self.input_buffer = COMPLETIONS[0]
+                else:
+                    matches = [c for c in COMPLETIONS if c.startswith(self.input_buffer)]
+                    if matches:
+                        self.input_buffer = matches[0]
+            return "tab"
+
+        if key == 27:
+            self.input_buffer = ""
+            return "escape"
+
+        if key in (curses.KEY_ENTER, 10, 13):
+            return "enter"
+
+        if 32 <= key <= 126:
+            ch = chr(key)
+            self.input_buffer += ch
+            return "char"
+
+        if key in (3, 4):
+            return "eof"
+
+        return "unknown"
+
+
 def main(stdscr):
     curses.curs_set(0)
     stdscr.nodelay(True)
@@ -259,95 +341,64 @@ def main(stdscr):
     curses.endwin()
     print_banner()
 
-    input_buffer = ""
-    canceller = ThinkingCanceller()
-    result_queue = queue.Queue()
-    think_thread = None
+    session = REPLSession(harness, user_id)
 
     while True:
         curses.endwin()
-        sys.stdout.write(f"{FG_CYAN}> {RESET}{input_buffer}\033[0G")
-        sys.stdout.write(f"\033[{len(input_buffer)}C")
+        prompt = f"{FG_CYAN}> {RESET}{session.input_buffer}"
+        sys.stdout.write(f"{prompt}\033[0G")
+        sys.stdout.write(f"\033[{len(session.input_buffer)}C")
         sys.stdout.flush()
 
         key = stdscr.getch()
 
         if key == curses.ERR:
-            if canceller.running:
-                if canceller.was_cancelled():
-                    canceller.stop()
+            if session.is_thinking():
+                if session.is_cancelled():
+                    session.finish_thinking()
                     print_error("Cancelled")
                     print()
-                    canceller = ThinkingCanceller()
-                    result_queue = queue.Queue()
-                    think_thread = None
-                elif not result_queue.empty():
-                    canceller.stop()
-                    status, result = result_queue.get_nowait()
+                    session = REPLSession(harness, user_id)
+                elif not session.result_queue.empty():
+                    session.finish_thinking()
+                    status, result = session.result_queue.get_nowait()
                     if status == "success":
                         print_agent_message(result)
                     else:
                         print_error(f"Error: {result}")
                     print()
-                    canceller = ThinkingCanceller()
-                    result_queue = queue.Queue()
-                    think_thread = None
+                    session = REPLSession(harness, user_id)
             continue
 
-        if key in (curses.KEY_ENTER, 10, 13):
-            user_input = input_buffer.strip()
-            input_buffer = ""
+        action = session.handle_key(key)
+
+        if action == "enter":
+            user_input = session.input_buffer.strip()
+            session.input_buffer = ""
             print()
             curses.endwin()
 
-            is_cmd = handle_command(user_input, harness, user_id)
-            if is_cmd:
+            try:
+                is_cmd = handle_command(user_input, harness, user_id)
+            except SystemExit:
+                print(f"{FG_GREEN}Goodbye!{RESET}")
+                return
+
+            if is_cmd or not user_input:
                 continue
 
-            if not user_input:
-                continue
-
-            canceller = ThinkingCanceller("Thinking")
-            canceller.start()
-            result_queue = queue.Queue()
-            think_thread = threading.Thread(
-                target=run_think_in_thread,
-                args=(harness, user_input, user_id, result_queue),
-                daemon=True
-            )
-            think_thread.start()
+            session.start_thinking(user_input)
             continue
 
-        if key == curses.KEY_BACKSPACE or key in (127,):
-            input_buffer = input_buffer[:-1]
+        if action == "escape":
+            if session.is_thinking():
+                session.cancel_thinking()
             continue
 
-        if key == 9:
-            if input_buffer == "":
-                input_buffer = "/"
-            elif input_buffer == "/":
-                matches = [c for c in COMPLETIONS if c.startswith("/")]
-                if matches:
-                    input_buffer = matches[0]
-            continue
-
-        if key == 27:
-            if canceller.running and not canceller.was_cancelled():
-                canceller.cancel_event.set()
-            input_buffer = ""
-            continue
-
-        if key in (3, 4):
+        if action == "eof":
             curses.endwin()
             print(f"{FG_GREEN}Goodbye!{RESET}")
             return
-
-        if 32 <= key <= 126:
-            ch = chr(key)
-            if ch == "/" and input_buffer == "":
-                input_buffer = ch
-            elif ch.isprintable():
-                input_buffer += ch
 
 
 if __name__ == "__main__":
