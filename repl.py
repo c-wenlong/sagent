@@ -7,6 +7,8 @@ Usage: python3 repl.py
 
 import os
 import sys
+import tty
+import termios
 import time
 import threading
 import queue
@@ -28,6 +30,158 @@ FG_YELLOW = "\033[93m"
 FG_MAGENTA = "\033[95m"
 FG_DIM = "\033[90m"
 FG_RED = "\033[91m"
+FG_BLUE = "\033[94m"
+FG_BOLD_GREEN = "\033[1;92m"
+FG_BOLD_CYAN = "\033[1;96m"
+
+COMMANDS = [
+    ("remember <text>", "Store a fact"),
+    ("pref <text>", "Store a preference"),
+    ("interact <text>", "Store an interaction"),
+    ("think <text>", "Store a thought"),
+    ("event <text>", "Store an event"),
+    ("memories", "Show recent memories"),
+    ("profile", "Show user profile"),
+    ("clear", "Clear screen"),
+    ("help", "Show help"),
+]
+
+
+class CommandPalette:
+    """Shows a dropdown command palette when user types /."""
+
+    def __init__(self, commands):
+        self.commands = commands
+        self.selected = 0
+        self.filter_text = ""
+        self.visible = False
+        self.width = 50
+        self.height = 0
+        self.start_row = 0
+
+    def show(self, at_row=0):
+        self.visible = True
+        self.selected = 0
+        self.filter_text = ""
+        self.start_row = at_row
+        self._update_height()
+        self._draw()
+
+    def hide(self):
+        self.visible = False
+        self._erase()
+
+    def _update_height(self):
+        self.height = min(len(self.commands), 8) + 2
+
+    def _erase(self):
+        if self.height == 0:
+            return
+        sys.stdout.write("\033[2J\033[0G")
+        for _ in range(self.height):
+            sys.stdout.write("\033[2K\033[1B\033[0G")
+        sys.stdout.write(f"\033[{self.start_row}A")
+        sys.stdout.flush()
+
+    def _draw(self):
+        for i in range(self.height):
+            sys.stdout.write(f"\033[{self.start_row + i + 1};0H")
+            sys.stdout.write("\033[2K")
+            if i == 0:
+                line = f"  {FG_BOLD_CYAN}Commands:{RESET} (↑↓ navigate, Enter select, Esc cancel)"
+                sys.stdout.write(line)
+            elif i == self.height - 1:
+                sys.stdout.write("  " + "─" * (self.width - 4))
+            else:
+                idx = i - 1
+                if idx < len(self.commands):
+                    cmd, desc = self.commands[idx]
+                    prefix = f"{FG_BOLD_GREEN}►{RESET}" if idx == self.selected else " "
+                    highlight = "\033[7m" if idx == self.selected else ""
+                    reset = "\033[0m" if idx == self.selected else ""
+                    sys.stdout.write(f"  {prefix} {highlight}{FG_CYAN}{cmd:<20}{RESET}{reset} {FG_DIM}{desc}{RESET}")
+        sys.stdout.flush()
+
+    def handle_key(self, ch):
+        if ch == "\033[A":
+            self.selected = max(0, self.selected - 1)
+            self._draw()
+        elif ch == "\033[B":
+            self.selected = min(len(self.commands) - 1, self.selected + 1)
+            self._draw()
+        elif ch == "\r":
+            cmd, _ = self.commands[self.selected]
+            self.hide()
+            return cmd
+        elif ch == "\x1b":
+            self.hide()
+            return None
+        return ""
+
+
+def get_key():
+    """Get a single keypress. Returns empty string on timeout."""
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        ch = sys.stdin.read(1)
+        if ch == "\x1b":
+            more = sys.stdin.read(2)
+            ch += more
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    return ch
+
+
+def read_input_with_palette(prompt, row):
+    """Read input line with command palette support."""
+    sys.stdout.write(f"\r\033[K{prompt}")
+    sys.stdout.flush()
+
+    palette = CommandPalette(COMMANDS)
+    buf = ""
+
+    while True:
+        key = get_key()
+
+        if palette.visible:
+            result = palette.handle_key(key)
+            if result is None:
+                pass
+            elif result:
+                sys.stdout.write(f"\r\033[K{prompt}{buf}{result} ")
+                sys.stdout.flush()
+                return buf + result
+            continue
+
+        if key == "\r":
+            sys.stdout.write("\r\n")
+            sys.stdout.flush()
+            return buf
+        elif key == "\x1b":
+            sys.stdout.write("\r\n")
+            sys.stdout.flush()
+            raise KeyboardInterrupt
+        elif key == "\177":
+            buf = buf[:-1]
+            sys.stdout.write(f"\r\033[K{prompt}{buf} ")
+            sys.stdout.flush()
+        elif key == "/":
+            buf += "/"
+            sys.stdout.write(f"\r\033[K{prompt}{buf}")
+            sys.stdout.flush()
+            if len(buf) == 1:
+                palette.show(at_row=row + 1)
+                if not palette.visible:
+                    sys.stdout.write(f"\r\033[K{prompt}{buf}")
+                    sys.stdout.flush()
+        elif len(key) == 1 and key.isprintable():
+            buf += key
+            sys.stdout.write(key)
+            sys.stdout.flush()
+        elif key == "\003":
+            raise KeyboardInterrupt
 
 
 class ThinkingCanceller:
@@ -149,7 +303,7 @@ def main():
 
     while True:
         try:
-            user_input = input(f"{FG_CYAN}> {RESET}").strip()
+            user_input = read_input_with_palette(f"{FG_CYAN}> {RESET}", row=5).strip()
         except (EOFError, KeyboardInterrupt):
             print("\nGoodbye!")
             break

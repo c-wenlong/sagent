@@ -6,7 +6,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 from io import StringIO
 
-from repl import ThinkingCanceller
+from repl import ThinkingCanceller, CommandPalette, COMMANDS
 
 
 class TestThinkingCanceller:
@@ -19,6 +19,19 @@ class TestThinkingCanceller:
     def test_canceller_was_cancelled_false_initially(self):
         c = ThinkingCanceller()
         assert c.was_cancelled() is False
+
+
+class TestCommandPalette:
+    def test_palette_init(self):
+        p = CommandPalette(COMMANDS)
+        assert p.visible is False
+        assert p.selected == 0
+        assert len(p.commands) == 9
+
+    def test_palette_commands_loaded(self):
+        p = CommandPalette(COMMANDS)
+        assert p.commands[0][0] == "remember <text>"
+        assert "Store a fact" in p.commands[0][1]
 
 
 class TestREPLMemoryTypes:
