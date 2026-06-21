@@ -2,6 +2,18 @@
 
 All notable changes to sagent are documented here.
 
+## [0.1.1] - 2026-06-21
+
+### Added
+- Interactive REPL (`repl.py`) for chat-based memory interactions
+- New AgentHarness tests: start_session, end_session, get_recent_memories, recall
+
+### Changed
+- N/A
+
+### Fixed
+- N/A
+
 ## [0.1.0] - 2026-06-21
 
 ### Added
@@ -14,9 +26,6 @@ All notable changes to sagent are documented here.
 - Integration tests
 - GitHub Actions CI pipeline
 - demo.py cross-session memory demonstration
-
-### Changed
-- N/A
 
 ### Fixed
 - ContextBuilder now always shows current query even when no memories

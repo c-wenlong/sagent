@@ -105,6 +105,25 @@ pytest tests/ -v -m "not integration"
 3. Update CHANGELOG.md with your changes
 4. Do not commit `.env` or API keys
 
+## Test Requirements
+
+**Write tests for every new feature or change.** This is enforced.
+
+### Adding a new feature
+1. Write unit tests in `tests/test_harness.py`
+2. Write integration tests in `tests/test_integration.py` if it touches HydraDB or LLM
+3. Run `pytest tests/test_harness.py -v` — all tests must pass before committing
+
+### Fixing a bug
+1. Write a test that reproduces the bug
+2. Fix the bug
+3. Verify the test passes
+4. Commit with the fix
+
+### Test categories
+- **Unit tests** (`tests/test_harness.py`) — Mock HydraDB/LLM, fast, no API keys needed
+- **Integration tests** (`tests/test_integration.py`) — Real API calls, requires secrets, skip locally without keys
+
 ## Architecture Notes
 
 - Memory is external (HydraDB), not in LLM conversation state

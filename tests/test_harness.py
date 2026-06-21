@@ -240,6 +240,40 @@ class TestAgentHarness:
                 assert len(profile.preferences) == 1
                 assert len(profile.facts) == 1
 
+    def test_start_session(self):
+        harness = AgentHarness(api_key="test", tenant_id="test")
+        session = harness.start_session("user_1")
+        assert session.user_id == "user_1"
+        assert session.active is True
+
+    def test_end_session(self):
+        harness = AgentHarness(api_key="test", tenant_id="test")
+        session = harness.start_session("user_1")
+        ended = harness.end_session(session.id)
+        assert ended is not None
+        assert ended.active is False
+        assert ended.ended_at is not None
+
+    def test_get_recent_memories(self):
+        harness = AgentHarness(api_key="test", tenant_id="test")
+        with patch.object(harness.memory_store, "get_recent") as mock_recent:
+            mock_recent.return_value = [
+                MemoryEntry(content="Test", type=MemoryType.FACT, user_id="user_1")
+            ]
+            results = harness.get_recent_memories("user_1")
+            assert len(results) == 1
+            assert results[0].content == "Test"
+
+    def test_recall(self):
+        harness = AgentHarness(api_key="test", tenant_id="test")
+        with patch.object(harness.memory_store, "recall") as mock_recall:
+            mock_recall.return_value = [
+                MemoryEntry(content="Rust", type=MemoryType.FACT, user_id="user_1")
+            ]
+            results = harness.recall("Rust", "user_1")
+            assert len(results) == 1
+            mock_recall.assert_called_once_with(query="Rust", user_id="user_1", limit=5)
+
     def test_call_llm_fallback(self):
         with patch.dict("os.environ", {}, clear=True):
             harness = AgentHarness(
