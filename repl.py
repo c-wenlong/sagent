@@ -9,6 +9,7 @@ import os
 import sys
 import time
 import threading
+import select
 from dotenv import load_dotenv
 from PIL import Image
 
@@ -27,6 +28,7 @@ FG_CYAN = "\033[96m"
 FG_YELLOW = "\033[93m"
 FG_MAGENTA = "\033[95m"
 FG_DIM = "\033[90m"
+FG_RED = "\033[91m"
 
 
 def load_avatar_pixels(img_path, max_width=20, max_height=12):
@@ -63,22 +65,12 @@ def load_avatar_pixels(img_path, max_width=20, max_height=12):
     return result
 
 
-def print_avatar(avatar_pixels, label):
-    """Print avatar pixel art with label."""
-    for i, row in enumerate(avatar_pixels):
-        line = ""
-        for color in row:
-            line += f"\033[48;5;{color}m  "
-        line += f"\033[0m  {label if i == len(avatar_pixels) // 2 else ''}"
-        print(line)
-
-
 AVATAR_HUMAN = load_avatar_pixels("assets/icons/human.png", 20, 12)
 AVATAR_AGENT = load_avatar_pixels("assets/icons/agent.png", 20, 12)
 
 
 class Spinner:
-    """Simple spinner animation for loading state."""
+    """Spinner animation with Escape key detection."""
 
     def __init__(self, message="Thinking"):
         self.message = message
@@ -86,40 +78,51 @@ class Spinner:
         self.index = 0
         self.running = False
         self.thread = None
+        self.cancelled = False
 
     def _spin(self):
         while self.running:
+            # Check for Escape key press (non-blocking)
+            if self._escape_pressed():
+                self.cancelled = True
+                self.running = False
+                sys.stdout.write(f"\r{FG_RED}✗ Cancelled{RESET}")
+                sys.stdout.flush()
+                return
+
             frame = self.frames[self.index % len(self.frames)]
             sys.stdout.write(f"\r{FG_YELLOW}{frame}{RESET} {self.message}...")
             sys.stdout.flush()
             self.index += 1
             time.sleep(0.08)
 
+    def _escape_pressed(self):
+        """Check if Escape key was pressed (non-blocking read)."""
+        if select.select([sys.stdin], [], [], 0)[0]:
+            ch = sys.stdin.read(1)
+            if ch == '\x1b':  # Escape
+                # Drain any remaining escape sequence characters
+                while select.select([sys.stdin], [], [], 0)[0]:
+                    sys.stdin.read(1)
+                return True
+            # Put non-escape chars back would be complex, so we just note it
+        return False
+
     def start(self):
         self.running = True
+        self.cancelled = False
         self.thread = threading.Thread(target=self._spin, daemon=True)
         self.thread.start()
 
-    def stop(self, final_message=None):
+    def stop(self):
         self.running = False
         if self.thread:
             self.thread.join(timeout=0.5)
         sys.stdout.write("\r" + " " * (len(self.message) + 10) + "\r")
         sys.stdout.flush()
-        if final_message:
-            print(final_message)
 
-
-def print_user_message(text):
-    """Print user message with background highlight and avatar."""
-    lines = text.split("\n")
-    print(f"{BG_USER}{FG_WHITE}{BOLD} {RESET}", end="")
-    for color in AVATAR_HUMAN[0]:
-        print(f"\033[48;5;{color}m  ", end="")
-    print(f"\033[0m {FG_CYAN}{BOLD}You:{RESET}")
-    for i, line in enumerate(lines):
-        print(f"{BG_USER}{FG_WHITE} {line}{RESET}")
-    print()
+    def is_cancelled(self):
+        return self.cancelled
 
 
 def print_agent_message(text):
@@ -142,6 +145,11 @@ def print_system_message(text):
 def print_success(text):
     """Print success message."""
     print(f"{FG_GREEN}✓ {text}{RESET}")
+
+
+def print_error(text):
+    """Print error message."""
+    print(f"{FG_RED}✗ {text}{RESET}")
 
 
 def print_header(text):
@@ -178,7 +186,8 @@ def main():
 
     print("\033[2J\033[H", end="")
     print_header("  sagent  ")
-    print(f"{FG_DIM}Type {FG_GREEN}help{FG_DIM} for commands, {FG_GREEN}exit{FG_DIM} to quit\n")
+    print(f"{FG_DIM}Type {FG_GREEN}help{FG_DIM} for commands, {FG_GREEN}exit{FG_DIM} to quit")
+    print(f"{FG_DIM}Press {FG_YELLOW}Esc{FG_DIM} during thinking to cancel\n")
 
     while True:
         try:
@@ -277,7 +286,8 @@ def main():
         if user_input.lower() == "clear":
             print("\033[2J\033[H", end="")
             print_header("  sagent  ")
-            print(f"{FG_DIM}Type {FG_GREEN}help{FG_DIM} for commands, {FG_GREEN}exit{FG_DIM} to quit\n")
+            print(f"{FG_DIM}Type {FG_GREEN}help{FG_DIM} for commands, {FG_GREEN}exit{FG_DIM} to quit")
+            print(f"{FG_DIM}Press {FG_YELLOW}Esc{FG_DIM} during thinking to cancel\n")
             continue
 
         if user_input.lower() == "help":
@@ -295,6 +305,8 @@ def main():
   {FG_GREEN}help{FG_GREEN}               Show this help
   {FG_GREEN}exit/quit{FG_GREEN}          Exit
 
+  {FG_YELLOW}Esc{RESET} - Cancel during thinking
+
 Or just type anything to chat with the agent!
 """)
             continue
@@ -309,6 +321,11 @@ Or just type anything to chat with the agent!
         )
 
         spinner.stop()
+
+        if spinner.is_cancelled():
+            print_error("Cancelled")
+            print()
+            continue
 
         print_agent_message(response)
         print()

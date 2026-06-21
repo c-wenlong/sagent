@@ -12,6 +12,7 @@ All notable changes to sagent are documented here.
 - Colorized terminal output (ANSI)
 - All memory type shortcuts: remember, pref, interact, think, event
 - REPL tests for avatar pixel loading
+- **Escape key** cancels thinking (stops spinner, skips response)
 
 ### Changed
 - N/A
