@@ -14,7 +14,7 @@ from harness import (
     ContextBuilder,
     SessionManager,
 )
-from harness.memory import TimeRange
+from harness.context import TimeRange
 
 
 class TestMemoryEntry:
@@ -180,12 +180,13 @@ class TestSessionManager:
 
 class TestAgentHarness:
     def test_init_without_llm(self):
-        harness = AgentHarness(
-            api_key="test-key",
-            tenant_id="test-tenant",
-            llm_api_key=None,
-        )
-        assert harness.llm is None
+        with patch.dict("os.environ", {}, clear=True):
+            harness = AgentHarness(
+                api_key="test-key",
+                tenant_id="test-tenant",
+                llm_api_key=None,
+            )
+            assert harness.llm is None
 
     def test_init_with_llm(self):
         with patch("harness.harness.OpenAI"):
@@ -240,11 +241,12 @@ class TestAgentHarness:
                 assert len(profile.facts) == 1
 
     def test_call_llm_fallback(self):
-        harness = AgentHarness(
-            api_key="test-key",
-            tenant_id="test-tenant",
-            llm_api_key=None,
-        )
+        with patch.dict("os.environ", {}, clear=True):
+            harness = AgentHarness(
+                api_key="test-key",
+                tenant_id="test-tenant",
+                llm_api_key=None,
+            )
 
-        result = harness._call_llm("test prompt")
-        assert "not configured" in result
+            result = harness._call_llm("test prompt")
+            assert "not configured" in result

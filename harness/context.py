@@ -89,8 +89,9 @@ class ContextBuilder:
         if sections:
             context_parts.append("## Memory Context\n")
             context_parts.extend(sections)
-            context_parts.append("\n## Current Query\n")
-            context_parts.append(f"{prompt}\n")
+            context_parts.append("\n")
+        context_parts.append("## Current Query\n")
+        context_parts.append(f"{prompt}\n")
 
         return "".join(context_parts)
 
