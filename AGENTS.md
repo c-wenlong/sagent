@@ -134,3 +134,20 @@ python3 -m pytest tests/ -v -m "not integration"
 - This is intentional — allows multiple agents to share memory
 - `infer=True` is used for HydraDB's graph construction
 - SessionManager is in-memory only (could be extended to persist)
+
+## Learned User Preferences
+
+- Only commit or push when explicitly asked
+- REPL slash commands should use a non-blocking `/` dropdown autocomplete (pi/opencode pattern), not curses
+- REPL startup should show a landing screen with banner, info panel, and status bar (Hermes-agent style)
+
+## Learned Workspace Facts
+
+- CLI entry is `sagent` via `sagent_cli.py`; install with `pip install -e .`
+- `pyproject.toml` `[tool.setuptools] py-modules` must list every top-level module the CLI imports (`sagent_cli`, `repl`, `repl_tui`, `demo`)
+- REPL is split: `repl.py` (session/input logic) and `repl_tui.py` (landing screen, styling, banners)
+- REPL slash autocomplete uses `prompt_toolkit` with live filtering; piped/non-TTY input falls back to plain `input()`
+- Memory type and user_id are embedded in HydraDB stored text as `[type:user_id] content` because the list API returns no metadata
+- HydraDB SDK recall reads `chunk.chunk_content`, not `chunk.content`
+- Required env vars: `HYDRA_DB_API_KEY`, `HYDRA_DB_TENANT_ID`, `NEBIUS_API_KEY`
+- `demo.py` isolates memory per run via `HYDRA_DB_SUB_TENANT_ID` (defaults to `demo-run`)

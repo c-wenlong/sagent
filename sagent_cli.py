@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
 """CLI entry point for the sagent command."""
 
+from __future__ import annotations
+
 import argparse
 import sys
+from pathlib import Path
+
+# Ensure repo-root modules resolve even when editable-install metadata is stale.
+_PKG_ROOT = Path(__file__).resolve().parent
+if str(_PKG_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PKG_ROOT))
 
 
 def main(argv: list[str] | None = None) -> None:

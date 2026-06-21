@@ -8,11 +8,13 @@ import pytest
 from prompt_toolkit.document import Document
 
 from repl import (
+    _RUNTIME,
     COMMANDS,
     COMPLETIONS,
     REPLSession,
     SlashCommandCompleter,
     ThinkingCanceller,
+    _interaction_content,
     chat_with_spinner,
     complete_slash_command,
     filter_slash_commands,
@@ -70,7 +72,8 @@ class MockHarness:
     def profile(self, user_id):
         return self.profile_data
 
-    def think(self, prompt, user_id, store_interaction=True):
+    def think(self, prompt, user_id, store_interaction=False):
+        self.last_store_interaction = store_interaction
         if self.think_error:
             raise self.think_error
         return self.think_response
@@ -137,6 +140,36 @@ class TestHandleCommand:
         harness = MockHarness()
         result = handle_command("clear", harness, "user1")
         assert result is True
+
+    def test_save_command_stores_last_exchange(self):
+        harness = MockHarness()
+        _RUNTIME["last_exchange"] = {"prompt": "hello", "response": "hi there"}
+        result = handle_command("save", harness, "user1")
+        assert result is True
+        assert len(harness.remembered) == 1
+        assert "hello" in harness.remembered[0]["content"]
+        assert "hi there" in harness.remembered[0]["content"]
+
+    def test_save_custom_text(self):
+        harness = MockHarness()
+        result = handle_command("save met with team about roadmap", harness, "user1")
+        assert result is True
+        assert harness.remembered[0]["content"] == "met with team about roadmap"
+
+    def test_save_without_exchange_shows_message(self, capsys):
+        harness = MockHarness()
+        _RUNTIME["last_exchange"] = None
+        handle_command("save", harness, "user1")
+        assert len(harness.remembered) == 0
+        assert "Nothing to save" in capsys.readouterr().out
+
+    def test_autosave_toggle(self, capsys):
+        harness = MockHarness()
+        _RUNTIME["auto_store"] = False
+        handle_command("autosave on", harness, "user1")
+        assert _RUNTIME["auto_store"] is True
+        handle_command("autosave off", harness, "user1")
+        assert _RUNTIME["auto_store"] is False
 
     def test_exit_command_raises_systemexit(self):
         harness = MockHarness()
@@ -233,13 +266,37 @@ class TestRunThinkInThread:
         run_think_in_thread(harness, "hello", "user1", result_queue, cancel_event)
         assert result_queue.empty()
 
+    def test_passes_store_interaction_flag(self):
+        import queue
+        import threading
+
+        harness = MockHarness()
+        result_queue = queue.Queue()
+        cancel_event = threading.Event()
+
+        run_think_in_thread(
+            harness, "hello", "user1", result_queue, cancel_event, store_interaction=True
+        )
+        status, _ = result_queue.get_nowait()
+        assert status == "success"
+        assert harness.last_store_interaction is True
+
+
+class TestInteractionContent:
+    def test_truncates_long_response(self):
+        content = _interaction_content("hi", "x" * 300)
+        assert len(content) < 300
+        assert content.endswith("...")
+
 
 class TestChatWithSpinner:
-    def test_prints_agent_response(self, capsys):
+    def test_chat_stores_last_exchange(self, capsys):
         harness = MockHarness()
+        _RUNTIME["auto_store"] = False
+        _RUNTIME["last_exchange"] = None
         chat_with_spinner(harness, "user1", "hello there")
-        output = capsys.readouterr().out
-        assert "Hello from agent" in output
+        assert _RUNTIME["last_exchange"]["prompt"] == "hello there"
+        assert "/save" in capsys.readouterr().out
 
     def test_prints_error_on_failure(self, capsys):
         harness = MockHarness()
@@ -253,7 +310,10 @@ class TestCommandsList:
     """Tests for command constants."""
 
     def test_all_commands_present(self):
-        expected = ["remember", "pref", "interact", "think", "event", "memories", "profile", "clear", "help"]
+        expected = [
+            "remember", "pref", "interact", "think", "event",
+            "save", "autosave", "memories", "profile", "clear", "help",
+        ]
         for cmd in expected:
             found = any(c.startswith(cmd) for c in COMPLETIONS)
             assert found, f"Command {cmd} not found"

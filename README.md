@@ -17,8 +17,16 @@ A minimal (~750 LoC) Python harness that wraps HydraDB to give AI agents long-te
 pip install -e .
 cp .env.example .env
 # Edit .env with your API keys
-sagent          # interactive REPL
+sagent          # interactive REPL (requires ~/Library/Python/3.12/bin on PATH)
 sagent demo     # cross-session memory demo
+```
+
+From the repo without installing, use `./sagent` or `python3 sagent_cli.py`.
+
+If `sagent` is not found after install, add pip's script directory to your PATH:
+
+```bash
+export PATH="$HOME/Library/Python/3.12/bin:$PATH"
 ```
 
 ## Environment Variables

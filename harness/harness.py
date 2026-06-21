@@ -72,7 +72,7 @@ class AgentHarness:
         prompt: str,
         user_id: str,
         session_id: str | None = None,
-        store_interaction: bool = True,
+        store_interaction: bool = False,
         include_types: list[MemoryType] | None = None,
         time_range: TimeRange | None = None,
     ) -> str:

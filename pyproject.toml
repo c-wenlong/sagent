@@ -30,7 +30,7 @@ build-backend = "setuptools.build_meta"
 include = ["harness*"]
 
 [tool.setuptools]
-py-modules = ["sagent_cli", "repl", "demo"]
+py-modules = ["sagent_cli", "repl", "repl_tui", "demo"]
 
 [tool.ruff]
 line-length = 88

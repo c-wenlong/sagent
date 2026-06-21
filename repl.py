@@ -19,31 +19,36 @@ from prompt_toolkit.shortcuts import CompleteStyle, PromptSession
 from prompt_toolkit.styles import Style
 
 from harness import AgentHarness, MemoryType
+from repl_tui import (
+    FG_CYAN,
+    FG_DIM,
+    FG_GREEN,
+    FG_YELLOW,
+    RESET,
+    memory_count,
+    print_agent_message,
+    print_error,
+    print_header,
+    print_landing_screen,
+    print_prompt_divider,
+    print_status_bar,
+    print_success,
+    print_system_message,
+    print_user_message,
+)
 
 load_dotenv()
 
-RESET = "\033[0m"
-BG_USER = "\033[48;5;237m"
-BG_AGENT = "\033[48;5;239m"
-BG_HEADER = "\033[44m"
-FG_WHITE = "\033[97m"
-FG_GREEN = "\033[92m"
-FG_CYAN = "\033[96m"
-FG_YELLOW = "\033[93m"
-FG_MAGENTA = "\033[95m"
-FG_DIM = "\033[90m"
-FG_RED = "\033[91m"
-FG_BOLD_CYAN = "\033[1;96m"
-
 PROMPT = f"{FG_CYAN}> {RESET}"
 
-# Slash commands shown in the autocomplete dropdown (pi/opencode-style).
 SLASH_COMMANDS = [
     {"name": "remember", "description": "Store a fact", "hint": "<text>"},
     {"name": "pref", "description": "Store a preference", "hint": "<text>"},
     {"name": "interact", "description": "Store an interaction", "hint": "<text>"},
     {"name": "think", "description": "Store a thought", "hint": "<text>"},
     {"name": "event", "description": "Store an event", "hint": "<text>"},
+    {"name": "save", "description": "Save last chat exchange (or custom text)", "hint": "[text]"},
+    {"name": "autosave", "description": "Toggle auto-save of chat exchanges", "hint": "on|off"},
     {"name": "memories", "description": "Show recent memories"},
     {"name": "profile", "description": "Show user profile"},
     {"name": "clear", "description": "Clear screen"},
@@ -56,43 +61,25 @@ COMPLETIONS = [cmd["name"] for cmd in SLASH_COMMANDS]
 
 PROMPT_STYLE = Style.from_dict({"prompt": "ansicyan bold"})
 _PROMPT_SESSION: PromptSession | None = None
+_RUNTIME: dict = {}
 
 
-def print_banner():
-    """Print the initial banner."""
-    print("\033[2J\033[H", end="")
-    print(f"{BG_HEADER}{FG_WHITE}  sagent  {RESET}")
-    print(f"{FG_DIM}Type {FG_GREEN}/{FG_DIM} for commands, {FG_GREEN}help{FG_DIM} to list all, {FG_GREEN}exit{FG_DIM} to quit")
-    print(f"{FG_DIM}Press {FG_YELLOW}Ctrl+C{FG_DIM} during thinking to cancel\n")
+def _env_flag(name: str, default: bool = False) -> bool:
+    val = os.getenv(name, "").strip().lower()
+    if not val:
+        return default
+    return val in ("1", "true", "yes", "on")
 
 
-def print_agent_message(text):
-    """Print agent message with background highlight."""
-    lines = text.split("\n")
-    print(f"{BG_AGENT}{FG_WHITE} {FG_MAGENTA}Agent:{RESET}")
-    for line in lines:
-        print(f"{BG_AGENT}{FG_WHITE} {line}{RESET}")
-    print()
+def _auto_store_enabled() -> bool:
+    return bool(_RUNTIME.get("auto_store", False))
 
 
-def print_success(text):
-    """Print success message."""
-    print(f"{FG_GREEN}✓ {text}{RESET}")
-
-
-def print_error(text):
-    """Print error message."""
-    print(f"{FG_RED}✗ {text}{RESET}")
-
-
-def print_header(text):
-    """Print header banner."""
-    print(f"{BG_HEADER}{FG_WHITE} {text} {RESET}")
-
-
-def print_system_message(text):
-    """Print system message."""
-    print(f"{FG_DIM}{text}{RESET}")
+def _interaction_content(prompt: str, response: str) -> str:
+    preview = response[:200]
+    if len(response) > 200:
+        preview += "..."
+    return f"User asked: {prompt}. Agent responded: {preview}"
 
 
 def normalize_user_input(user_input: str) -> str:
@@ -204,10 +191,14 @@ class ThinkingCanceller:
         self.cancel_event.set()
 
 
-def run_think_in_thread(harness, prompt, user_id, result_queue, cancel_event):
+def run_think_in_thread(harness, prompt, user_id, result_queue, cancel_event, store_interaction=False):
     """Run think() in a thread and put result in queue."""
     try:
-        response = harness.think(prompt=prompt, user_id=user_id, store_interaction=True)
+        response = harness.think(
+            prompt=prompt,
+            user_id=user_id,
+            store_interaction=store_interaction,
+        )
         if not cancel_event.is_set():
             result_queue.put(("success", response))
     except Exception as e:
@@ -255,6 +246,32 @@ def handle_command(user_input, harness, user_id):
         print_success(f"Stored event: {content}")
         return True
 
+    if user_input.lower() == "save" or user_input.lower().startswith("save "):
+        custom = user_input[4:].strip() if user_input.lower().startswith("save ") else ""
+        if custom:
+            content = custom
+        else:
+            exchange = _RUNTIME.get("last_exchange")
+            if not exchange:
+                print_system_message("Nothing to save yet — chat first, then /save.")
+                print()
+                return True
+            content = _interaction_content(exchange["prompt"], exchange["response"])
+        harness.remember(content=content, user_id=user_id, memory_type=MemoryType.INTERACTION)
+        print_success("Stored interaction.")
+        return True
+
+    if user_input.lower() in ("autosave", "autosave on", "autosave off"):
+        if user_input.lower() == "autosave on":
+            _RUNTIME["auto_store"] = True
+        elif user_input.lower() == "autosave off":
+            _RUNTIME["auto_store"] = False
+        else:
+            _RUNTIME["auto_store"] = not _auto_store_enabled()
+        state = "on" if _auto_store_enabled() else "off"
+        print_success(f"Auto-save is {state}.")
+        return True
+
     if user_input.lower() == "memories":
         recent = harness.get_recent_memories(user_id, limit=10)
         if not recent:
@@ -273,7 +290,7 @@ def handle_command(user_input, harness, user_id):
 
     if user_input.lower() == "profile":
         profile = harness.profile(user_id)
-        print_header(f" Profile: {user_id} ")
+        print_header(f"Profile: {user_id}")
         print(f"  📝 Facts: {len(profile.facts)}")
         print(f"  ⚙️ Preferences: {len(profile.preferences)}")
         print(f"  💬 Interactions: {len(profile.interactions)}")
@@ -283,25 +300,39 @@ def handle_command(user_input, harness, user_id):
         return True
 
     if user_input.lower() == "clear":
-        print_banner()
+        runtime_harness = _RUNTIME.get("harness", harness)
+        runtime_user = _RUNTIME.get("user_id", user_id)
+        runtime_model = _RUNTIME.get("model", getattr(runtime_harness, "llm_model", "unknown"))
+        print_landing_screen(
+            harness=runtime_harness,
+            user_id=runtime_user,
+            model=runtime_model,
+            session_id=_RUNTIME.get("session_id"),
+        )
+        if _RUNTIME.get("harness"):
+            _refresh_status_bar()
         return True
 
     if user_input.lower() == "help":
         print(f"""
-{BG_HEADER} Commands {RESET}
+{FG_GREEN}Slash Commands{RESET}
 
   {FG_GREEN}/remember <text>{RESET}  Store a fact
   {FG_GREEN}/pref <text>{RESET}         Store a preference
   {FG_GREEN}/interact <text>{RESET}    Store an interaction
   {FG_GREEN}/think <text>{RESET}       Store a thought
   {FG_GREEN}/event <text>{RESET}       Store an event
+  {FG_GREEN}/save{RESET}               Save the last chat exchange
+  {FG_GREEN}/save <text>{RESET}        Save custom interaction text
+  {FG_GREEN}/autosave on|off{RESET}    Toggle auto-save of chat turns
   {FG_GREEN}/memories{RESET}            Show recent memories
   {FG_GREEN}/profile{RESET}             Show user profile
   {FG_GREEN}/clear{RESET}              Clear screen
-  {FG_GREEN}/help{FG_DIM}               Show this help
-  {FG_GREEN}/exit{FG_DIM}               Exit
+  {FG_GREEN}/help{RESET}               Show this help
+  {FG_GREEN}/exit{RESET}               Exit
 
-  {FG_DIM}Type {FG_GREEN}/{FG_DIM} to open the command menu while typing.
+  {FG_DIM}Chat is ephemeral by default — use {FG_GREEN}/save{FG_DIM} or {FG_GREEN}/remember{FG_DIM} to persist.
+Type {FG_GREEN}/{FG_DIM} while typing to open the command menu.
 Or just type anything to chat with the agent!
 """)
         return True
@@ -332,6 +363,7 @@ class REPLSession:
                 self.user_id,
                 self.result_queue,
                 self.canceller.cancel_event,
+                _auto_store_enabled(),
             ),
             daemon=True,
         )
@@ -361,11 +393,21 @@ class REPLSession:
         return None
 
 
+def _refresh_status_bar() -> None:
+    harness = _RUNTIME.get("harness")
+    user_id = _RUNTIME.get("user_id", "")
+    if not harness:
+        return
+    count = memory_count(harness, user_id)
+    print_status_bar(model=_RUNTIME.get("model", ""), user_id=user_id, memory_count=count)
+
+
 def read_input():
     """Read a line of input with slash-command autocomplete when attached to a TTY."""
     try:
         if sys.stdin.isatty():
-            return get_prompt_session().prompt([("class:prompt", "> ")]).strip()
+            print_prompt_divider()
+            return get_prompt_session().prompt([("class:prompt", "❯ ")]).strip()
         return input(PROMPT).strip()
     except EOFError:
         print()
@@ -377,6 +419,7 @@ def read_input():
 
 def chat_with_spinner(harness, user_id, user_input):
     """Send a chat message and show a spinner while waiting."""
+    print_user_message(user_input)
     session = REPLSession(harness, user_id)
     session.start_thinking(user_input)
 
@@ -399,6 +442,9 @@ def chat_with_spinner(harness, user_id, user_input):
     status, response = result
     if status == "success":
         print_agent_message(response)
+        _RUNTIME["last_exchange"] = {"prompt": user_input, "response": response}
+        if not _auto_store_enabled():
+            print(f"{FG_DIM}Tip: {FG_GREEN}/save{FG_DIM} to store this exchange.{RESET}")
     else:
         print_error(f"Error: {response}")
         print()
@@ -416,8 +462,24 @@ def main():
 
     harness = AgentHarness(api_key=hydra_key, tenant_id=tenant_id, llm_api_key=llm_key)
     user_id = os.getenv("SAGENT_USER_ID", "default_user")
+    session = harness.start_session(user_id)
 
-    print_banner()
+    _RUNTIME.update(
+        harness=harness,
+        user_id=user_id,
+        session_id=session.id,
+        model=harness.llm_model,
+        auto_store=_env_flag("SAGENT_AUTO_STORE", False),
+        last_exchange=None,
+    )
+
+    print_landing_screen(
+        harness=harness,
+        user_id=user_id,
+        model=harness.llm_model,
+        session_id=session.id,
+    )
+    _refresh_status_bar()
 
     while True:
         user_input = read_input()
@@ -425,6 +487,7 @@ def main():
         try:
             is_cmd = handle_command(user_input, harness, user_id)
         except SystemExit:
+            harness.end_session(session.id)
             print(f"{FG_GREEN}Goodbye!{RESET}")
             return
 
@@ -432,6 +495,7 @@ def main():
             continue
 
         chat_with_spinner(harness, user_id, user_input)
+        _refresh_status_bar()
 
 
 if __name__ == "__main__":

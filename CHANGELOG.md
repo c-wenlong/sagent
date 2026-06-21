@@ -14,8 +14,12 @@ All notable changes to sagent are documented here.
 - **Ctrl+C** cancels thinking (stops spinner, skips response)
 
 ### Changed
+- **Opt-in memory storage** — chat no longer auto-saves to HydraDB; use `/save`, `/remember`, or other store commands
+- REPL adds `/save` (last exchange or custom text) and `/autosave on|off` (set `SAGENT_AUTO_STORE=1` for default on)
+- `AgentHarness.think()` defaults to `store_interaction=False`
 - REPL rewritten without curses — uses standard `input()` loop to fix terminal glitches
 - REPL slash commands use `prompt_toolkit` dropdown autocomplete (pi/opencode-style, non-blocking)
+- REPL landing screen with Hermes-style ASCII banner, info panel, status bar, and prompt dividers
 - `demo.py` rewritten as a structured two-act cross-session demo (sagent meta narrative, all 5 memory types, isolated sub-tenant)
 
 ### Fixed

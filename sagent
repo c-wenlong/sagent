@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Run sagent from the repo without pip install or PATH setup.
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec python3 "$ROOT/sagent_cli.py" "$@"
