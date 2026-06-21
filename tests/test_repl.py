@@ -14,7 +14,7 @@ class TestThinkingCanceller:
         c = ThinkingCanceller("Thinking")
         assert c.message == "Thinking"
         assert c.running is False
-        assert c.cancelled is False
+        assert c.was_cancelled() is False
 
     def test_canceller_was_cancelled_false_initially(self):
         c = ThinkingCanceller()
