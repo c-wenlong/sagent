@@ -8,10 +8,10 @@ from hydra_db import HydraDB
 
 
 class HydraDBClient:
-    def __init__(self, api_key: str, tenant_id: str, sub_tenant_id: str = "default"):
+    def __init__(self, api_key: str, tenant_id: str, sub_tenant_id: Optional[str] = None):
         self.api_key = api_key
         self.tenant_id = tenant_id
-        self.sub_tenant_id = sub_tenant_id
+        self.sub_tenant_id = sub_tenant_id or "default"
         self._client: Optional[HydraDB] = None
 
     def _get_client(self) -> HydraDB:
@@ -68,7 +68,7 @@ class HydraDBClient:
             {
                 "source_id": chunk.source_id,
                 "content": chunk.content,
-                "metadata": chunk.metadata,
+                "metadata": getattr(chunk, 'metadata', None) or {},
             }
             for chunk in results.chunks
         ]
@@ -89,11 +89,10 @@ class HydraDBClient:
         )
         return [
             {
-                "source_id": item.source_id,
-                "content": item.content,
-                "metadata": item.metadata,
+                "source_id": item.memory_id,
+                "content": item.memory_content,
             }
-            for item in result.items
+            for item in result.user_memories
         ]
 
     def delete_memory(self, memory_id: str) -> bool:

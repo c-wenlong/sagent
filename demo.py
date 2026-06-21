@@ -22,7 +22,6 @@ def demo():
     harness = AgentHarness(
         api_key=hydra_key,
         tenant_id=tenant_id,
-        sub_tenant_id=sub_tenant_id,
         llm_api_key=llm_key,
     )
 

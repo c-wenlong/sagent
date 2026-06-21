@@ -106,12 +106,11 @@ class MemoryStore:
         )
         entries = []
         for r in results:
-            metadata = r.get("metadata", {})
             entry = MemoryEntry(
-                id=metadata.get("memory_id", r.get("source_id", "")),
-                type=MemoryType(metadata.get("memory_type", "fact")),
+                id=r.get("source_id", ""),
+                type=MemoryType.FACT,
                 content=r.get("content", ""),
-                metadata=metadata,
+                metadata=r.get("metadata", {}) or {},
                 source_id=r.get("source_id"),
             )
             entries.append(entry)
@@ -125,14 +124,11 @@ class MemoryStore:
         all_memories = self.client.get_memories(kind="memories", page_size=limit)
         entries = []
         for m in all_memories:
-            metadata = m.get("metadata", {})
-            if user_id and metadata.get("user_id") != user_id:
-                continue
             entry = MemoryEntry(
-                id=metadata.get("memory_id", m.get("source_id", "")),
-                type=MemoryType(metadata.get("memory_type", "fact")),
+                id=m.get("source_id", ""),
+                type=MemoryType.FACT,
                 content=m.get("content", ""),
-                metadata=metadata,
+                metadata={},
                 source_id=m.get("source_id"),
             )
             entries.append(entry)
