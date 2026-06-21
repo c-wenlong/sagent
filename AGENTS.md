@@ -66,17 +66,21 @@ Currently uses HydraDB. To switch:
 3. Update `requirements.txt`
 4. Document in CHANGELOG.md
 
+## Python Version
+
+**Always use `python3`** — do not use `python` (may point to Python 2 on some systems).
+
 ## Running Tests
 
 ```bash
 # All unit tests
-pytest tests/test_harness.py -v
+python3 -m pytest tests/test_harness.py -v
 
 # Specific test class
-pytest tests/test_harness.py::TestMemoryEntry -v
+python3 -m pytest tests/test_harness.py::TestMemoryEntry -v
 
 # Skip integration tests (don't need API keys)
-pytest tests/ -v -m "not integration"
+python3 -m pytest tests/ -v -m "not integration"
 ```
 
 ## Common Tasks
