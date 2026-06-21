@@ -5,8 +5,12 @@ All notable changes to sagent are documented here.
 ## [0.1.1] - 2026-06-21
 
 ### Added
-- Interactive REPL (`repl.py`) for chat-based memory interactions
-- New AgentHarness tests: start_session, end_session, get_recent_memories, recall
+- Interactive REPL (`repl.py`) with streaming output and loading animation
+- Spinner animation while agent is thinking
+- Character-by-character streaming of agent responses
+- Colorized terminal output (ANSI)
+- All memory type shortcuts: remember, pref, interact, think, event
+- REPL tests
 
 ### Changed
 - N/A
