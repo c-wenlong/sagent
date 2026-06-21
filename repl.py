@@ -7,8 +7,6 @@ Usage: python3 repl.py
 
 import os
 import sys
-import tty
-import termios
 import time
 import threading
 import queue
@@ -18,8 +16,8 @@ from harness import AgentHarness, MemoryType
 
 load_dotenv()
 
-BOLD = "\033[1m"
 RESET = "\033[0m"
+BOLD = "\033[1m"
 BG_USER = "\033[48;5;237m"
 BG_AGENT = "\033[48;5;239m"
 BG_HEADER = "\033[44m"
@@ -30,7 +28,6 @@ FG_YELLOW = "\033[93m"
 FG_MAGENTA = "\033[95m"
 FG_DIM = "\033[90m"
 FG_RED = "\033[91m"
-FG_BLUE = "\033[94m"
 FG_BOLD_GREEN = "\033[1;92m"
 FG_BOLD_CYAN = "\033[1;96m"
 
@@ -46,142 +43,26 @@ COMMANDS = [
     ("help", "Show help"),
 ]
 
-
-class CommandPalette:
-    """Shows a dropdown command palette when user types /."""
-
-    def __init__(self, commands):
-        self.commands = commands
-        self.selected = 0
-        self.filter_text = ""
-        self.visible = False
-        self.width = 50
-        self.height = 0
-        self.start_row = 0
-
-    def show(self, at_row=0):
-        self.visible = True
-        self.selected = 0
-        self.filter_text = ""
-        self.start_row = at_row
-        self._update_height()
-        self._draw()
-
-    def hide(self):
-        self.visible = False
-        self._erase()
-
-    def _update_height(self):
-        self.height = min(len(self.commands), 8) + 2
-
-    def _erase(self):
-        if self.height == 0:
-            return
-        sys.stdout.write("\033[2J\033[0G")
-        for _ in range(self.height):
-            sys.stdout.write("\033[2K\033[1B\033[0G")
-        sys.stdout.write(f"\033[{self.start_row}A")
-        sys.stdout.flush()
-
-    def _draw(self):
-        for i in range(self.height):
-            sys.stdout.write(f"\033[{self.start_row + i + 1};0H")
-            sys.stdout.write("\033[2K")
-            if i == 0:
-                line = f"  {FG_BOLD_CYAN}Commands:{RESET} (↑↓ navigate, Enter select, Esc cancel)"
-                sys.stdout.write(line)
-            elif i == self.height - 1:
-                sys.stdout.write("  " + "─" * (self.width - 4))
-            else:
-                idx = i - 1
-                if idx < len(self.commands):
-                    cmd, desc = self.commands[idx]
-                    prefix = f"{FG_BOLD_GREEN}►{RESET}" if idx == self.selected else " "
-                    highlight = "\033[7m" if idx == self.selected else ""
-                    reset = "\033[0m" if idx == self.selected else ""
-                    sys.stdout.write(f"  {prefix} {highlight}{FG_CYAN}{cmd:<20}{RESET}{reset} {FG_DIM}{desc}{RESET}")
-        sys.stdout.flush()
-
-    def handle_key(self, ch):
-        if ch == "\033[A":
-            self.selected = max(0, self.selected - 1)
-            self._draw()
-        elif ch == "\033[B":
-            self.selected = min(len(self.commands) - 1, self.selected + 1)
-            self._draw()
-        elif ch == "\r":
-            cmd, _ = self.commands[self.selected]
-            self.hide()
-            return cmd
-        elif ch == "\x1b":
-            self.hide()
-            return None
-        return ""
+COMPLETIONS = [cmd for cmd, _ in COMMANDS]
 
 
-def get_key():
-    """Get a single keypress. Returns empty string on timeout."""
-    fd = sys.stdin.fileno()
-    old_settings = termios.tcgetattr(fd)
-    try:
-        tty.setraw(fd)
-        ch = sys.stdin.read(1)
-        if ch == "\x1b":
-            more = sys.stdin.read(2)
-            ch += more
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-    return ch
+class CommandCompleter:
+    """Provides tab completion using readline."""
 
+    def __init__(self, options):
+        self.options = sorted(options)
+        self.index = 0
+        self.matches = []
 
-def read_input_with_palette(prompt, row):
-    """Read input line with command palette support."""
-    sys.stdout.write(f"\r\033[K{prompt}")
-    sys.stdout.flush()
-
-    palette = CommandPalette(COMMANDS)
-    buf = ""
-
-    while True:
-        key = get_key()
-
-        if palette.visible:
-            result = palette.handle_key(key)
-            if result is None:
-                pass
-            elif result:
-                sys.stdout.write(f"\r\033[K{prompt}{buf}{result} ")
-                sys.stdout.flush()
-                return buf + result
-            continue
-
-        if key == "\r":
-            sys.stdout.write("\r\n")
-            sys.stdout.flush()
-            return buf
-        elif key == "\x1b":
-            sys.stdout.write("\r\n")
-            sys.stdout.flush()
-            raise KeyboardInterrupt
-        elif key == "\177":
-            buf = buf[:-1]
-            sys.stdout.write(f"\r\033[K{prompt}{buf} ")
-            sys.stdout.flush()
-        elif key == "/":
-            buf += "/"
-            sys.stdout.write(f"\r\033[K{prompt}{buf}")
-            sys.stdout.flush()
-            if len(buf) == 1:
-                palette.show(at_row=row + 1)
-                if not palette.visible:
-                    sys.stdout.write(f"\r\033[K{prompt}{buf}")
-                    sys.stdout.flush()
-        elif len(key) == 1 and key.isprintable():
-            buf += key
-            sys.stdout.write(key)
-            sys.stdout.flush()
-        elif key == "\003":
-            raise KeyboardInterrupt
+    def complete(self, text, state):
+        if state == 0:
+            self.matches = [opt for opt in self.options if opt.startswith(text)]
+            self.index = 0
+        if self.index < len(self.matches):
+            result = self.matches[self.index]
+            self.index += 1
+            return result
+        return None
 
 
 class ThinkingCanceller:
@@ -194,7 +75,6 @@ class ThinkingCanceller:
         self.running = False
         self.cancelled = False
         self.spinner_thread = None
-        self.input_thread = None
         self.cancel_event = threading.Event()
 
     def _spinner_loop(self):
@@ -240,6 +120,18 @@ def run_think_in_thread(harness, prompt, user_id, result_queue):
         result_queue.put(("error", str(e)))
 
 
+def setup_readline():
+    """Setup readline with tab completion."""
+    try:
+        import readline
+        completer = CommandCompleter(COMPLETIONS)
+        readline.set_completer(completer.complete)
+        readline.parse_and_bind("tab: complete")
+        readline.parse_and_bind("?: complete")
+    except ImportError:
+        pass
+
+
 def print_user_message(text):
     """Print user message with background highlight."""
     lines = text.split("\n")
@@ -278,6 +170,11 @@ def print_header(text):
     print(f"{BG_HEADER}{FG_WHITE} {text} {RESET}")
 
 
+def print_hint(text):
+    """Print inline hint below input."""
+    print(f"{FG_DIM}{text}{RESET}")
+
+
 def main():
     hydra_key = os.getenv("HYDRA_DB_API_KEY")
     tenant_id = os.getenv("HYDRA_DB_TENANT_ID")
@@ -296,17 +193,33 @@ def main():
 
     user_id = os.getenv("SAGENT_USER_ID", "default_user")
 
+    setup_readline()
+
     print("\033[2J\033[H", end="")
     print_header("  sagent  ")
     print(f"{FG_DIM}Type {FG_GREEN}help{FG_DIM} for commands, {FG_GREEN}exit{FG_DIM} to quit")
-    print(f"{FG_DIM}Press {FG_YELLOW}Esc{FG_DIM} during thinking to cancel\n")
+    print(f"{FG_DIM}Press {FG_YELLOW}Esc{FG_DIM} during thinking to cancel")
+    print()
+    print_hint("Tip: Type / then press Tab to see commands")
 
     while True:
         try:
-            user_input = read_input_with_palette(f"{FG_CYAN}> {RESET}", row=5).strip()
+            user_input = input(f"{FG_CYAN}> {RESET}").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nGoodbye!")
             break
+
+        if user_input == "/":
+            print_hint("")
+            print_hint(f"{FG_BOLD_CYAN}Commands:{RESET} remember, pref, interact, think, event, memories, profile, clear, help")
+            print_hint("Tab to autocomplete, or type full command")
+            print_hint("")
+            user_input = input(f"{FG_CYAN}> {RESET}").strip()
+            while user_input == "/":
+                print_hint(f"{FG_BOLD_CYAN}Commands:{RESET} remember, pref, interact, think, event, memories, profile, clear, help")
+                user_input = input(f"{FG_CYAN}> {RESET}").strip()
+            if not user_input:
+                continue
 
         if not user_input:
             continue
@@ -399,7 +312,9 @@ def main():
             print("\033[2J\033[H", end="")
             print_header("  sagent  ")
             print(f"{FG_DIM}Type {FG_GREEN}help{FG_DIM} for commands, {FG_GREEN}exit{FG_DIM} to quit")
-            print(f"{FG_DIM}Press {FG_YELLOW}Esc{FG_DIM} during thinking to cancel\n")
+            print(f"{FG_DIM}Press {FG_YELLOW}Esc{FG_DIM} during thinking to cancel")
+            print()
+            print_hint("Tip: Type / then press Tab to see commands")
             continue
 
         if user_input.lower() == "help":
@@ -417,7 +332,7 @@ def main():
   {FG_GREEN}help{FG_DIM}               Show this help
   {FG_GREEN}exit/quit{FG_DIM}          Exit
 
-  {FG_YELLOW}Esc{RESET} during thinking - Cancel
+  {FG_YELLOW}Tab{RESET} - Autocomplete commands
 
 Or just type anything to chat with the agent!
 """)
