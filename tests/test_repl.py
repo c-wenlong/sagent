@@ -6,7 +6,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 from io import StringIO
 
-from repl import Spinner
+from repl import Spinner, load_avatar_pixels
 
 
 class TestSpinner:
@@ -25,17 +25,28 @@ class TestSpinner:
         from repl import stream_print
         output = StringIO()
         with patch("sys.stdout", output):
-            stream_print("Hello", delay=0)
+            stream_print("Hello")
         result = output.getvalue()
         assert result == "Hello\n"
 
 
+class TestAvatarPixels:
+    def test_load_avatar_pixels(self):
+        pixels = load_avatar_pixels("assets/icons/human.png", 20, 12)
+        assert len(pixels) == 12
+        assert len(pixels[0]) == 20
+
+    def test_avatar_colors_are_integers(self):
+        pixels = load_avatar_pixels("assets/icons/agent.png", 10, 5)
+        for row in pixels:
+            for color in row:
+                assert isinstance(color, int)
+                assert 0 <= color <= 255
+
+
 class TestREPLCommands:
     def test_repl_requires_env_vars(self):
-        with patch.dict("os.environ", {}, clear=True):
-            with patch("sys.exit") as mock_exit:
-                # Will exit because env vars are missing
-                pass  # Can't easily test main() without mocking input
+        pass
 
 
 class TestREPLMemoryTypes:

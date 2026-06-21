@@ -2,7 +2,7 @@
 """
 Interactive REPL for sagent harness with streaming and loading animation.
 
-Usage: python repl.py
+Usage: python3 repl.py
 """
 
 import os
@@ -10,10 +10,71 @@ import sys
 import time
 import threading
 from dotenv import load_dotenv
+from PIL import Image
 
 from harness import AgentHarness, MemoryType
 
 load_dotenv()
+
+BOLD = "\033[1m"
+RESET = "\033[0m"
+BG_USER = "\033[48;5;237m"
+BG_AGENT = "\033[48;5;239m"
+BG_HEADER = "\033[44m"
+FG_WHITE = "\033[97m"
+FG_GREEN = "\033[92m"
+FG_CYAN = "\033[96m"
+FG_YELLOW = "\033[93m"
+FG_MAGENTA = "\033[95m"
+FG_DIM = "\033[90m"
+
+
+def load_avatar_pixels(img_path, max_width=20, max_height=12):
+    """Load and resize image to pixel art, return list of ANSI color codes per row."""
+    img = Image.open(img_path).convert("RGB")
+    img = img.resize((max_width, max_height), Image.Resampling.NEAREST)
+    pixels = img.load()
+    width, height = img.size
+
+    def rgb_to_ansi(r, g, b):
+        if r == g == b:
+            return 16 if r < 128 else 231
+        if r > 200 and g < 100 and b < 100:
+            return 196
+        if r > 200 and g > 200 and b < 100:
+            return 226
+        if r < 100 and g > 200 and b < 100:
+            return 46
+        if r < 100 and g > 200 and b > 200:
+            return 51
+        if r < 100 and g < 100 and b > 200:
+            return 21
+        if r > 200 and g < 100 and b > 200:
+            return 201
+        return 255
+
+    result = []
+    for y in range(height):
+        row = []
+        for x in range(width):
+            r, g, b = pixels[x, y]
+            row.append(rgb_to_ansi(r, g, b))
+        result.append(row)
+    return result
+
+
+def print_avatar(avatar_pixels, label):
+    """Print avatar pixel art with label."""
+    for i, row in enumerate(avatar_pixels):
+        line = ""
+        for color in row:
+            line += f"\033[48;5;{color}m  "
+        line += f"\033[0m  {label if i == len(avatar_pixels) // 2 else ''}"
+        print(line)
+
+
+AVATAR_HUMAN = load_avatar_pixels("assets/icons/human.png", 20, 12)
+AVATAR_AGENT = load_avatar_pixels("assets/icons/agent.png", 20, 12)
 
 
 class Spinner:
@@ -29,7 +90,7 @@ class Spinner:
     def _spin(self):
         while self.running:
             frame = self.frames[self.index % len(self.frames)]
-            sys.stdout.write(f"\r{frame} {self.message}...")
+            sys.stdout.write(f"\r{FG_YELLOW}{frame}{RESET} {self.message}...")
             sys.stdout.flush()
             self.index += 1
             time.sleep(0.08)
@@ -43,19 +104,57 @@ class Spinner:
         self.running = False
         if self.thread:
             self.thread.join(timeout=0.5)
-        # Clear the spinner line
         sys.stdout.write("\r" + " " * (len(self.message) + 10) + "\r")
         sys.stdout.flush()
         if final_message:
             print(final_message)
 
 
-def stream_print(text, delay=0.01):
-    """Print text character by character with a small delay."""
+def print_user_message(text):
+    """Print user message with background highlight and avatar."""
+    lines = text.split("\n")
+    print(f"{BG_USER}{FG_WHITE}{BOLD} {RESET}", end="")
+    for color in AVATAR_HUMAN[0]:
+        print(f"\033[48;5;{color}m  ", end="")
+    print(f"\033[0m {FG_CYAN}{BOLD}You:{RESET}")
+    for i, line in enumerate(lines):
+        print(f"{BG_USER}{FG_WHITE} {line}{RESET}")
+    print()
+
+
+def print_agent_message(text):
+    """Print agent message with background highlight and avatar."""
+    lines = text.split("\n")
+    print(f"{BG_AGENT}{FG_WHITE}{BOLD} {RESET}", end="")
+    for color in AVATAR_AGENT[0]:
+        print(f"\033[48;5;{color}m  ", end="")
+    print(f"\033[0m {FG_MAGENTA}{BOLD}Agent:{RESET}")
+    for line in lines:
+        print(f"{BG_AGENT}{FG_WHITE} {line}{RESET}")
+    print()
+
+
+def print_system_message(text):
+    """Print system message."""
+    print(f"{FG_DIM}{text}{RESET}")
+
+
+def print_success(text):
+    """Print success message."""
+    print(f"{FG_GREEN}✓ {text}{RESET}")
+
+
+def print_header(text):
+    """Print header banner."""
+    print(f"{BG_HEADER}{FG_WHITE} {text} {RESET}")
+
+
+def stream_print(text):
+    """Print text character by character."""
     for char in text:
         sys.stdout.write(char)
         sys.stdout.flush()
-        time.sleep(delay)
+        time.sleep(0.003)
     print()
 
 
@@ -65,7 +164,7 @@ def main():
     llm_key = os.getenv("NEBIUS_API_KEY")
 
     if not all([hydra_key, tenant_id, llm_key]):
-        print("Error: Missing required environment variables.")
+        print(f"{FG_YELLOW}Error: Missing required environment variables.{RESET}")
         print("Set HYDRA_DB_API_KEY, HYDRA_DB_TENANT_ID, NEBIUS_API_KEY in .env")
         sys.exit(1)
 
@@ -77,12 +176,13 @@ def main():
 
     user_id = os.getenv("SAGENT_USER_ID", "default_user")
 
-    print("\033[1m\033[94msagent\033[0m - AI Agent with Long-Term Memory")
-    print("Type \033[92mhelp\033[0m for commands, \033[92mexit\033[0m to quit\n")
+    print("\033[2J\033[H", end="")
+    print_header("  sagent  ")
+    print(f"{FG_DIM}Type {FG_GREEN}help{FG_DIM} for commands, {FG_GREEN}exit{FG_DIM} to quit\n")
 
     while True:
         try:
-            user_input = input("\033[96mYou\033[0m: ").strip()
+            user_input = input(f"{FG_CYAN}> {RESET}").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nGoodbye!")
             break
@@ -91,7 +191,7 @@ def main():
             continue
 
         if user_input.lower() in ("exit", "quit", "q"):
-            print("Goodbye!")
+            print_success("Goodbye!")
             break
 
         if user_input.lower().startswith("remember "):
@@ -101,7 +201,7 @@ def main():
                 user_id=user_id,
                 memory_type=MemoryType.FACT,
             )
-            print(f"\033[92m✓\033[0m Stored: {content}")
+            print_success(f"Stored: {content}")
             continue
 
         if user_input.lower().startswith("pref "):
@@ -111,31 +211,61 @@ def main():
                 user_id=user_id,
                 memory_type=MemoryType.PREFERENCE,
             )
-            print(f"\033[92m✓\033[0m Stored preference: {content}")
+            print_success(f"Stored preference: {content}")
+            continue
+
+        if user_input.lower().startswith("interact "):
+            content = user_input[9:].strip()
+            harness.remember(
+                content=content,
+                user_id=user_id,
+                memory_type=MemoryType.INTERACTION,
+            )
+            print_success(f"Stored interaction: {content}")
+            continue
+
+        if user_input.lower().startswith("think "):
+            content = user_input[6:].strip()
+            harness.remember(
+                content=content,
+                user_id=user_id,
+                memory_type=MemoryType.THOUGHT,
+            )
+            print_success(f"Stored thought: {content}")
+            continue
+
+        if user_input.lower().startswith("event "):
+            content = user_input[6:].strip()
+            harness.remember(
+                content=content,
+                user_id=user_id,
+                memory_type=MemoryType.EVENT,
+            )
+            print_success(f"Stored event: {content}")
             continue
 
         if user_input.lower() == "memories":
             recent = harness.get_recent_memories(user_id, limit=10)
             if not recent:
-                print("No memories found.")
+                print_system_message("No memories found.")
             else:
-                print(f"\n\033[1mRecent Memories:\033[0m")
-                for i, m in enumerate(recent, 1):
-                    type_icon = {
+                print_header("Recent Memories")
+                for m in recent:
+                    type_icons = {
                         "fact": "📝",
                         "preference": "⚙️",
                         "interaction": "💬",
                         "thought": "💡",
                         "event": "📅",
                     }.get(m.type.value, "•")
-                    content_preview = m.content[:60] + "..." if len(m.content) > 60 else m.content
-                    print(f"  {type_icon} [{m.type.value}] {content_preview}")
+                    content_preview = m.content[:70] + "..." if len(m.content) > 70 else m.content
+                    print(f"  {type_icons} [{m.type.value}] {content_preview}")
             print()
             continue
 
         if user_input.lower() == "profile":
             profile = harness.profile(user_id)
-            print(f"\n\033[1mProfile for {user_id}:\033[0m")
+            print_header(f" Profile: {user_id} ")
             print(f"  📝 Facts: {len(profile.facts)}")
             print(f"  ⚙️ Preferences: {len(profile.preferences)}")
             print(f"  💬 Interactions: {len(profile.interactions)}")
@@ -146,58 +276,29 @@ def main():
 
         if user_input.lower() == "clear":
             print("\033[2J\033[H", end="")
+            print_header("  sagent  ")
+            print(f"{FG_DIM}Type {FG_GREEN}help{FG_DIM} for commands, {FG_GREEN}exit{FG_DIM} to quit\n")
             continue
 
         if user_input.lower() == "help":
-            print("""
-\033[1mCommands:\033[0m
-  \033[92mremember <text>\033[0m  - Store a fact (e.g., \033[90mremember I like coffee\033[0m)
-  \033[92mpref <text>\033[0m         - Store a preference (e.g., \033[90mpref dark mode\033[0m)
-  \033[92minteract <text>\033[0m   - Store an interaction
-  \033[92mthink <text>\033[0m       - Store a thought
-  \033[92mevent <text>\033[0m       - Store an event
-  \033[92mmemories\033[0m          - Show recent memories
-  \033[92mprofile\033[0m           - Show user profile summary
-  \033[92mclear\033[0m             - Clear screen
-  \033[92mhelp\033[0m             - Show this help
-  \033[92mexit/quit\033[0m        - Exit
+            print(f"""
+{BG_HEADER} Commands {RESET}
+
+  {FG_GREEN}remember <text>{RESET}  Store a fact
+  {FG_GREEN}pref <text>{RESET}         Store a preference
+  {FG_GREEN}interact <text>{RESET}    Store an interaction
+  {FG_GREEN}think <text>{RESET}       Store a thought
+  {FG_GREEN}event <text>{RESET}       Store an event
+  {FG_GREEN}memories{RESET}            Show recent memories
+  {FG_GREEN}profile{RESET}             Show user profile
+  {FG_GREEN}clear{RESET}              Clear screen
+  {FG_GREEN}help{FG_GREEN}               Show this help
+  {FG_GREEN}exit/quit{FG_GREEN}          Exit
 
 Or just type anything to chat with the agent!
 """)
             continue
 
-        # Handle interaction/thought/event shortcuts
-        if user_input.lower().startswith("interact "):
-            content = user_input[9:].strip()
-            harness.remember(
-                content=content,
-                user_id=user_id,
-                memory_type=MemoryType.INTERACTION,
-            )
-            print(f"\033[92m✓\033[0m Stored interaction: {content}")
-            continue
-
-        if user_input.lower().startswith("think "):
-            content = user_input[6:].strip()
-            harness.remember(
-                content=content,
-                user_id=user_id,
-                memory_type=MemoryType.THOUGHT,
-            )
-            print(f"\033[92m✓\033[0m Stored thought: {content}")
-            continue
-
-        if user_input.lower().startswith("event "):
-            content = user_input[6:].strip()
-            harness.remember(
-                content=content,
-                user_id=user_id,
-                memory_type=MemoryType.EVENT,
-            )
-            print(f"\033[92m✓\033[0m Stored event: {content}")
-            continue
-
-        # Chat with the agent
         spinner = Spinner("Thinking")
         spinner.start()
 
@@ -209,8 +310,7 @@ Or just type anything to chat with the agent!
 
         spinner.stop()
 
-        print("\033[95mAgent\033[0m: ", end="", flush=True)
-        stream_print(response, delay=0.005)
+        print_agent_message(response)
         print()
 
 

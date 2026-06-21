@@ -7,10 +7,11 @@ All notable changes to sagent are documented here.
 ### Added
 - Interactive REPL (`repl.py`) with streaming output and loading animation
 - Spinner animation while agent is thinking
-- Character-by-character streaming of agent responses
+- Pixel art avatars from `assets/icons/human.png` and `assets/icons/agent.png`
+- Background highlighting for user/agent messages instead of labels
 - Colorized terminal output (ANSI)
 - All memory type shortcuts: remember, pref, interact, think, event
-- REPL tests
+- REPL tests for avatar pixel loading
 
 ### Changed
 - N/A
