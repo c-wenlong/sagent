@@ -7,6 +7,7 @@ from typing import Any, TypeVar
 
 from openai import OpenAI
 
+from . import pendo
 from .client import HydraDBClient
 from .context import ContextBuilder, TimeRange
 from .memory import MemoryEntry, MemoryStore, MemoryType
@@ -95,6 +96,20 @@ class AgentHarness:
                 session_id=session_id,
             )
 
+        pendo.track(
+            "agent_query_completed",
+            visitor_id=user_id,
+            account_id=self.db_client.tenant_id,
+            properties={
+                "prompt_length": len(prompt),
+                "response_length": len(response),
+                "store_interaction": store_interaction,
+                "model": self.llm_model,
+                "has_time_range": time_range is not None,
+                "session_id": session_id or "",
+            },
+        )
+
         return response
 
     def remember(
@@ -119,6 +134,19 @@ class AgentHarness:
         if session_id:
             self.session_manager.add_memory_to_session(session_id, entry_id)
 
+        pendo.track(
+            "memory_stored",
+            visitor_id=user_id,
+            account_id=self.db_client.tenant_id,
+            properties={
+                "memory_type": memory_type.value,
+                "content_length": len(content),
+                "session_id": session_id or "",
+                "has_metadata": bool(metadata),
+                "has_embedding": embedding is not None,
+            },
+        )
+
         return entry_id
 
     def recall(
@@ -127,7 +155,20 @@ class AgentHarness:
         user_id: str,
         limit: int = 5,
     ) -> list[MemoryEntry]:
-        return self.memory_store.recall(query=query, user_id=user_id, limit=limit)
+        results = self.memory_store.recall(query=query, user_id=user_id, limit=limit)
+
+        pendo.track(
+            "memory_recalled",
+            visitor_id=user_id,
+            account_id=self.db_client.tenant_id,
+            properties={
+                "query_length": len(query),
+                "limit": limit,
+                "results_count": len(results),
+            },
+        )
+
+        return results
 
     def profile(self, user_id: str) -> UserProfile:
         all_entries = self.memory_store.get_recent(user_id, limit=100)
@@ -144,6 +185,20 @@ class AgentHarness:
                 profile.thoughts.append(entry.content)
             elif entry.type == MemoryType.EVENT:
                 profile.events.append(entry.content)
+
+        pendo.track(
+            "user_profile_retrieved",
+            visitor_id=user_id,
+            account_id=self.db_client.tenant_id,
+            properties={
+                "total_memories": len(all_entries),
+                "fact_count": len(profile.facts),
+                "preference_count": len(profile.preferences),
+                "interaction_count": len(profile.interactions),
+                "thought_count": len(profile.thoughts),
+                "event_count": len(profile.events),
+            },
+        )
 
         return profile
 
