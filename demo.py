@@ -15,7 +15,7 @@ import time
 
 from dotenv import load_dotenv
 
-from harness import AgentHarness, MemoryType
+from harness import AgentHarness, MemoryType, pendo
 
 load_dotenv()
 
@@ -210,6 +210,19 @@ def demo() -> None:
     narrate(
         "sagent separates durable memory (HydraDB) from ephemeral session state. "
         "Multiple agents can share the same memory store."
+    )
+
+    pendo.track(
+        "demo_completed",
+        visitor_id=user_id,
+        account_id=tenant_id,
+        properties={
+            "sub_tenant_id": sub_tenant_id,
+            "memories_stored": len(SESSION_1_MEMORIES),
+            "memories_recalled": len(recent),
+            "sessions_count": 2,
+            "llm_response_length": len(response),
+        },
     )
 
 

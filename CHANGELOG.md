@@ -2,6 +2,25 @@
 
 All notable changes to sagent are documented here.
 
+## [0.1.2] - 2026-06-25
+
+### Added
+- Server-side Pendo Track Event instrumentation (`harness/pendo.py`)
+- 12 track events across the codebase:
+  - `memory_stored` — fires after a memory is persisted to HydraDB
+  - `memory_recalled` — fires after a semantic search/recall completes
+  - `agent_query_completed` — fires after the LLM pipeline returns a response
+  - `session_started` — fires when a new conversation session begins
+  - `session_ended` — fires when a session is ended, includes duration and memory count
+  - `user_profile_retrieved` — fires when a user's memory profile is aggregated
+  - `chat_exchange_saved` — fires when `/save` persists a chat exchange
+  - `autosave_toggled` — fires when `/autosave` changes the auto-save setting
+  - `repl_session_started` — fires when the REPL is fully initialized
+  - `memories_listed` — fires when `/memories` lists recent memories
+  - `demo_completed` — fires when the cross-session demo finishes
+  - `context_built` — fires when ContextBuilder assembles memory context
+- Unit tests for pendo module (`tests/test_pendo.py`)
+
 ## [0.1.1] - 2026-06-21
 
 ### Added

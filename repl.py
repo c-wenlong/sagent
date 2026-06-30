@@ -18,7 +18,7 @@ from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.shortcuts import CompleteStyle, PromptSession
 from prompt_toolkit.styles import Style
 
-from harness import AgentHarness, MemoryType
+from harness import AgentHarness, MemoryType, pendo
 from repl_tui import (
     FG_CYAN,
     FG_DIM,
@@ -258,6 +258,15 @@ def handle_command(user_input, harness, user_id):
                 return True
             content = _interaction_content(exchange["prompt"], exchange["response"])
         harness.remember(content=content, user_id=user_id, memory_type=MemoryType.INTERACTION)
+        pendo.track(
+            "chat_exchange_saved",
+            visitor_id=user_id,
+            account_id=harness.db_client.tenant_id,
+            properties={
+                "save_type": "custom" if custom else "last_exchange",
+                "content_length": len(content),
+            },
+        )
         print_success("Stored interaction.")
         return True
 
@@ -269,6 +278,14 @@ def handle_command(user_input, harness, user_id):
         else:
             _RUNTIME["auto_store"] = not _auto_store_enabled()
         state = "on" if _auto_store_enabled() else "off"
+        pendo.track(
+            "autosave_toggled",
+            visitor_id=user_id,
+            account_id=harness.db_client.tenant_id,
+            properties={
+                "enabled": _auto_store_enabled(),
+            },
+        )
         print_success(f"Auto-save is {state}.")
         return True
 
@@ -285,6 +302,16 @@ def handle_command(user_input, harness, user_id):
                 }.get(m.type.value, "•")
                 preview = m.content[:70] + "..." if len(m.content) > 70 else m.content
                 print(f"  {type_icons} [{m.type.value}] {preview}")
+        memory_types = list({m.type.value for m in recent}) if recent else []
+        pendo.track(
+            "memories_listed",
+            visitor_id=user_id,
+            account_id=harness.db_client.tenant_id,
+            properties={
+                "memory_count": len(recent) if recent else 0,
+                "memory_types_present": ",".join(memory_types),
+            },
+        )
         print()
         return True
 
@@ -480,6 +507,17 @@ def main():
         session_id=session.id,
     )
     _refresh_status_bar()
+
+    pendo.track(
+        "repl_session_started",
+        visitor_id=user_id,
+        account_id=harness.db_client.tenant_id,
+        properties={
+            "model": harness.llm_model,
+            "auto_store_default": _auto_store_enabled(),
+            "session_id": session.id,
+        },
+    )
 
     while True:
         user_input = read_input()

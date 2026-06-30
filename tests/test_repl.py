@@ -62,6 +62,8 @@ class MockHarness:
         self.profile_data = MagicMock()
         self.think_response = "Hello from agent"
         self.think_error = None
+        self.db_client = MagicMock()
+        self.db_client.tenant_id = "test-tenant"
 
     def remember(self, content, user_id, memory_type):
         self.remembered.append({"content": content, "user_id": user_id, "memory_type": memory_type})

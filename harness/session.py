@@ -6,6 +6,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from . import pendo
 from .memory import MemoryEntry, MemoryStore
 
 
@@ -54,6 +55,16 @@ class SessionManager:
     def start_session(self, user_id: str) -> Session:
         session = Session(user_id=user_id)
         self._sessions[session.id] = session
+
+        pendo.track(
+            "session_started",
+            visitor_id=user_id,
+            account_id=self.memory_store.client.tenant_id,
+            properties={
+                "session_id": session.id,
+            },
+        )
+
         return session
 
     def end_session(self, session_id: str) -> Session | None:
@@ -62,6 +73,19 @@ class SessionManager:
         session = self._sessions[session_id]
         session.ended_at = datetime.utcnow()
         session.active = False
+
+        duration = (session.ended_at - session.started_at).total_seconds()
+        pendo.track(
+            "session_ended",
+            visitor_id=session.user_id,
+            account_id=self.memory_store.client.tenant_id,
+            properties={
+                "session_id": session_id,
+                "duration_seconds": round(duration, 1),
+                "memory_count": len(session.entry_ids),
+            },
+        )
+
         return session
 
     def get_session(self, session_id: str) -> Session | None:

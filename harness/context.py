@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
+from . import pendo
 from .memory import (
     MemoryEntry,
     MemoryStore,
@@ -107,7 +108,23 @@ class ContextBuilder:
         context_parts.append("## Current Query\n")
         context_parts.append(f"{prompt}\n")
 
-        return "".join(context_parts)
+        result = "".join(context_parts)
+
+        pendo.track(
+            "context_built",
+            visitor_id=user_id or "system",
+            account_id=self.memory_store.client.tenant_id,
+            properties={
+                "prompt_length": len(prompt),
+                "total_memories_fetched": len(all_memories),
+                "memories_after_filter": len(entries),
+                "has_time_range": time_range is not None,
+                "context_length": len(result),
+                "section_count": len(sections),
+            },
+        )
+
+        return result
 
     def _group_by_type(self, entries: list[MemoryEntry]) -> dict[MemoryType, list[MemoryEntry]]:
         grouped: dict[MemoryType, list[MemoryEntry]] = {}
